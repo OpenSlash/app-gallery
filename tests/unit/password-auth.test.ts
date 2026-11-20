@@ -275,7 +275,7 @@ describe('部署故障诊断', () => {
       expect(response.status).toBe(503)
       const body = await response.json() as { code: string; error: string; requestId: string }
       expect(body.code).toBe('DB_MIGRATIONS_REQUIRED')
-      expect(body.error).toContain('pnpm deploy')
+      expect(body.error).toContain('pnpm run deploy')
       expect(body.error).not.toContain('SELECT')
       expect(log.mock.calls[0]).toContain(body.requestId)
     } finally { log.mockRestore() }

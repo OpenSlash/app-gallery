@@ -24,7 +24,7 @@ app.use('/api/*', async (c, next) => {
     typeof c.env.DB?.prepare !== 'function') {
     return c.json({
       code: 'DB_BINDING_MISSING',
-      error: '当前 Worker 未绑定 D1 数据库。请检查绑定名称为 DB，并使用 pnpm deploy 完成部署。',
+      error: '当前 Worker 未绑定 D1 数据库。请检查绑定名称为 DB，并使用 pnpm run deploy 完成部署。',
     }, 503)
   }
   await next()
@@ -155,7 +155,7 @@ app.onError((error, c) => {
   if (messages.some(message => /no such (?:table|column)\b/i.test(message))) {
     return c.json({
       code: 'DB_MIGRATIONS_REQUIRED', requestId,
-      error: '数据库缺少所需的表或字段。请确认 DB 绑定的是正确数据库，并将 Cloudflare 构建设置中的部署命令改为 pnpm deploy，从最新提交重新构建部署。',
+      error: '数据库缺少所需的表或字段。请确认 DB 绑定的是正确数据库，并将 Cloudflare 构建设置中的部署命令改为 pnpm run deploy，从最新提交重新构建部署。',
     }, 503)
   }
   return c.json({ code: 'INTERNAL_ERROR', requestId, error: `操作失败，请在 Worker 日志中查询错误编号：${requestId}` }, 500)

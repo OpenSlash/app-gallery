@@ -81,7 +81,9 @@ End-to-end tests write to local D1 and archive their test applications on succes
 ## Deploy to Cloudflare
 
 Use the button above to create your own instance. Use `pnpm build` as the build
-command and **`pnpm deploy`** as the deploy command, not bare `wrangler deploy`.
+command and **`pnpm run deploy`** as the deploy command, not bare `wrangler deploy`.
+Use the explicit `run`: `pnpm deploy` invokes pnpm's built-in workspace deployment
+command instead of this project's script.
 The deploy script resolves the `DB` binding, reuses a database with the configured
 name or creates one if needed, and writes its real ID into `wrangler.jsonc`.
 It applies migrations, verifies the required database schema without reading any
@@ -123,7 +125,7 @@ URLs are disabled by default.
 
 ```sh
 pnpm exec wrangler login
-pnpm deploy
+pnpm run deploy
 ```
 
 An actual production deployment has not yet been verified for this repository.
@@ -141,7 +143,7 @@ found, it is using an older template or stale build. Update the repository
 connected to Cloudflare, not just the upstream repository. If Cloudflare cloned
 the template into your account, sync that copy first.
 
-In Workers Builds settings, ensure the deploy command is `pnpm deploy`, then
+In Workers Builds settings, ensure the deploy command is `pnpm run deploy`, then
 start a **new build from the updated commit**. Do not merely retry the old
 artifact or add a dashboard binding while leaving the fake ID in source.
 The deploy script repairs legacy zero IDs by resolving the configured database
@@ -150,7 +152,7 @@ name. It never replaces a non-placeholder ID automatically or deletes a database
 ### Updating an Existing Access-Based Installation
 
 Pull the update into your deployment repository, run `pnpm build` and
-`pnpm deploy` (which applies the session and credential migrations), and create
+`pnpm run deploy` (which applies the session and credential migrations), and create
 the password on the first-run page. Once password login works, remove the old Access
 application or its Worker protection if you no longer want the extra login.
 `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are no longer used. Existing application
@@ -190,7 +192,7 @@ lifecycle records. Anyone with access during this reset window could claim the i
 If the page reports a missing database binding, verify that the production Worker
 has a D1 binding named `DB`. Missing tables or columns require migrations on that
 same database, not another database with a similar name. In Workers Builds, set
-the **deploy command** to `pnpm deploy` (the build command remains `pnpm build`),
+the **deploy command** to `pnpm run deploy` (the build command remains `pnpm build`),
 then start a new build from the latest commit. Bare `wrangler deploy` does not
 apply the application's migrations. Do not delete the database or manually
 recreate credential tables. Unexpected failures include a request ID that can

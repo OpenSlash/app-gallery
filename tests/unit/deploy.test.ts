@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse } from 'jsonc-parser'
@@ -131,6 +132,21 @@ describe('D1 deployment orchestration', () => {
     expect(template.d1_databases[0].database_id).toBeUndefined()
     const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
     expect(pkg.scripts.deploy).toBe('node scripts/deploy.mjs')
+  })
+  it('pnpm run deploy invokes the package script outside a workspace', () => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      private: true,
+      scripts: { deploy: 'node -e "console.log(\'gallery-deploy-script-ran\')"' },
+    }))
+    const result = spawnSync('pnpm', ['run', 'deploy'], { cwd: root, encoding: 'utf8', timeout: 15_000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('gallery-deploy-script-ran')
+    for (const name of ['README.md', 'README.zh-CN.md']) {
+      const readme = readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8')
+      expect(readme).toContain('**`pnpm run deploy`**')
+      expect(readme).not.toMatch(/^pnpm deploy$/m)
+    }
   })
   it('uploads a build-time password as a runtime secret without adding it to config or command arguments', () => {
     const password = 'test-only-deploy-password'

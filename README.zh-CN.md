@@ -90,7 +90,9 @@ pnpm deploy:button https://github.com/OpenSlash/app-gallery
 也可以在已设置 Git origin 后直接执行 `pnpm deploy:button`。
 命令输出该仓库的 Deploy to Cloudflare 按钮 Markdown。
 在 Cloudflare 部署页面使用构建命令 `pnpm build`，部署命令必须为
-**`pnpm deploy`**，不能只执行 `wrangler deploy`。
+**`pnpm run deploy`**，不能只执行 `wrangler deploy`。
+必须保留 `run`：`pnpm deploy` 会调用 pnpm 自带的工作区部署命令，
+而不是本项目的发布脚本。
 发布脚本会先查找配置名称对应的 D1，不存在时创建，再将真实 ID 写入
 `wrangler.jsonc`，执行迁移，以零行查询检查必要表和字段，
 并重新构建 Vite 产物后发布。
@@ -124,7 +126,7 @@ SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值�
 
 ```sh
 pnpm exec wrangler login
-pnpm deploy
+pnpm run deploy
 ```
 
 生产账号资源和真实云端发布尚未在本仓库执行。
@@ -139,13 +141,13 @@ pnpm deploy
 说明仍在使用旧模板或旧构建。先更新 Cloudflare 实际关联的仓库；
 若一键部署复制了一份仓库到你的账号，需要同步那份副本，不能只更新上游。
 
-在 Workers Builds 设置中确认部署命令为 `pnpm deploy`，然后从最新提交
+在 Workers Builds 设置中确认部署命令为 `pnpm run deploy`，然后从最新提交
 启动一次全新构建。不要只重试旧产物，也不要仅在后台添加绑定却保留源码的假 ID。
 新版脚本会根据配置名称修复旧版全零 ID，不会自动替换非占位 ID，也不会删除数据库。
 
 ### 旧版本升级
 
-将更新拉取到你的部署仓库，执行 `pnpm build` 和 `pnpm deploy`，
+将更新拉取到你的部署仓库，执行 `pnpm build` 和 `pnpm run deploy`，
 后者会应用新增的会话及凭据表迁移，再打开页面设置密码。
 确认密码登录正常后，可移除旧 Access 应用或 Worker 保护，避免额外登录。
 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 不再使用，已有应用及历史数据保留。
@@ -178,7 +180,7 @@ DELETE FROM auth_sessions;
 
 若页面提示未绑定数据库，检查生产 Worker 是否有名称精确为 `DB` 的 D1 绑定。
 若提示缺表或字段，需在同一数据库执行迁移，不能操作另一份同名数据库。
-在 Workers Builds 中将**部署命令**设为 `pnpm deploy`，
+在 Workers Builds 中将**部署命令**设为 `pnpm run deploy`，
 构建命令仍为 `pnpm build`，然后从最新提交重新构建。
 仅运行 `wrangler deploy` 不会应用本项目迁移。不要删除数据库或手工重建凭据表。
 其他异常会提供可在 Worker 日志中查找的错误编号；排查时不要分享密码或 Cookie。
