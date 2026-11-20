@@ -5,7 +5,7 @@ test('录入、调整尺寸、搜索、收藏、生命周期和刷新持久化',
   await page.goto('/')
   await expect(page.getByRole('textbox', { name: '搜索应用' })).toBeVisible()
   await expect(page.locator('.intro')).toHaveCount(0)
-  await expect(page.locator('.topbar')).toHaveText('app gallery.')
+  await expect(page.locator('.topbar')).toHaveText('app gallery.API Token')
   await expect(page.getByRole('button', { name: '显示全部应用' })).toHaveCount(0)
   await page.getByRole('button', { name: '添加应用', exact: true }).first().click()
   await page.getByLabel('应用名称').fill(name)

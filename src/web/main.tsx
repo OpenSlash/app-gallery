@@ -18,6 +18,7 @@ import { Slider } from './components/ui/Slider'
 import { Checkbox } from './components/ui/Checkbox'
 import { Tooltip, TooltipProvider } from './components/ui/Tooltip'
 import { AuthGate } from './components/AuthGate'
+import { ApiTokens } from './components/ApiTokens'
 
 type Preferences = { view: 'launchpad' | 'cards'; scale: number; showDays: boolean }
 const defaults: Preferences = { view: 'launchpad', scale: 104, showDays: true }
@@ -46,6 +47,7 @@ function App({ onLogout }: { onLogout?: () => Promise<void> }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [demo, setDemo] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [tokensOpen, setTokensOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const source = demo ? demoApps() : items
   const categories = [...new Set(source.map(app => app.category).filter(Boolean))]
@@ -104,7 +106,10 @@ function App({ onLogout }: { onLogout?: () => Promise<void> }) {
   return <div className="workspace">
     <header className="topbar">
       <a className="brand" href="/" aria-label="App Gallery 首页"><span className="brand-symbol"><GridIcon /></span><span>app gallery<span className="brand-dot">.</span></span></a>
-      {onLogout && <button className="button text-button" onClick={logout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button>}
+      <div className="header-actions">
+        <button className="button text-button" onClick={() => setTokensOpen(true)}>API Token</button>
+        {onLogout && <button className="button text-button" onClick={logout} disabled={loggingOut}>{loggingOut ? '正在退出…' : '退出登录'}</button>}
+      </div>
     </header>
     <main>
       <h1 className="sr-only">所有应用</h1>
@@ -162,6 +167,7 @@ function App({ onLogout }: { onLogout?: () => Promise<void> }) {
     </nav>
     {detail && !editor && <AppDetails key={detail.id} app={detail} asOf={asOf} demo={demo} onClose={() => setSelected(null)} onEdit={() => setEditor(detail)} onUpdate={update} onRefresh={refresh} />}
     {editor && <AppEditor value={editor === 'new' ? undefined : editor} onClose={() => setEditor(null)} onSave={save} />}
+    {tokensOpen && <ApiTokens onClose={() => setTokensOpen(false)} />}
   </div>
 }
 

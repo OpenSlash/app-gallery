@@ -16,6 +16,7 @@ A private launchpad and lifecycle log for your websites, infrastructure services
 - Archive retired or not-yet-launched apps without deleting their history.
 - Accessible Radix UI primitives and 16 application icons from Radix Icons.
 - D1 persistence, validated APIs, and built-in administrator password login.
+- Revocable, expiring API tokens limited to adding applications.
 
 Each application currently has one production deployment and one URL. Dates use
 UTC. Durations describe recorded lifecycle periods, **not monitored uptime**.
@@ -181,6 +182,7 @@ first restrict access to the site, then run this SQL in the bound D1 console:
 ```sql
 DELETE FROM admin_credentials;
 DELETE FROM auth_sessions;
+DELETE FROM api_tokens;
 ```
 
 Remove any legacy runtime/build `ADMIN_PASSWORD`, then immediately create a new
@@ -212,7 +214,53 @@ session cookie. `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, and
 `POST /api/v1/auth/logout` provide session status, login, and logout respectively.
 `POST /api/v1/auth/setup` accepts `{ "password": "...", "confirmPassword": "..." }`
 only before an administrator credential exists. It does not log in automatically.
-Dedicated API tokens and CI integration authentication are not implemented.
+
+### Adding Applications With an API Token
+
+After signing in, open **API Token** in the header. Create a named token with an
+expiry of 7, 30 (default), 90, or 365 days. The full token is shown **once**, is not
+saved in browser storage, and cannot be retrieved later. D1 stores only its
+SHA-256 hash, a short display prefix, metadata, and a credential-bound tag.
+Keep it in a password manager or your script/CI secret store, not in source code,
+URLs, screenshots, or chat messages.
+
+Set `APP_GALLERY_TOKEN` in your shell environment and replace the hostname:
+
+```sh
+curl --fail-with-body 'https://your-worker.workers.dev/api/v1/applications' \
+  -H "Authorization: Bearer $APP_GALLERY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"My App","url":"https://example.com","type":"website","launchedOn":"2026-01-01"}'
+```
+
+A successful response is HTTP 201 with `{ "id": "..." }`. Required fields are
+`name`, `url` (HTTP or HTTPS, without embedded credentials), and `type`
+(`website`, `service`, or `app`). Optional fields include `description`, `category`,
+`tags`, `icon`, `color`, `size`, `favorite`, and `launchedOn` (UTC `YYYY-MM-DD`,
+not in the future; omitted or null means not yet launched).
+Each request creates a new application; there is no automatic deduplication.
+
+Tokens can **only** call `POST /api/v1/applications`; they cannot list applications,
+edit/archive them, change lifecycle records, or access authentication/token
+management. HTTPS is required except on loopback for development. Script requests
+do not need a Cookie or Origin header. Cross-origin browser calls remain blocked;
+there is no permissive CORS. A supplied invalid Authorization header never falls
+back to an existing browser session.
+
+The management UI shows up to 100 tokens, with unexpired non-revoked tokens first
+and recent history next, expiry, and last authenticated
+call time (which may include requests subsequently rejected by input validation).
+Revoke a token to disable subsequent calls; browser logout does not revoke tokens.
+Changing the administrator credential invalidates tokens bound to the previous one.
+At most 20 unexpired, non-revoked tokens are allowed; revoke obsolete tokens before
+creating more. Local development bypass alone cannot issue tokens: configure a
+real administrator password first.
+
+Token management requires the administrator's same-origin browser session:
+`GET /api/v1/auth/tokens`, `POST /api/v1/auth/tokens` with
+`{ "name": "integration", "expiresInDays": 30 }`, and
+`POST /api/v1/auth/tokens/:id/revoke` with `{}`. Bearer tokens cannot call these.
+Deploy updates with `pnpm run deploy` to apply the token-table migration.
 
 ## Project Layout
 

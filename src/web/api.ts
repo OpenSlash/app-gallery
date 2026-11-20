@@ -7,7 +7,7 @@ export async function api<T>(path: string, body?: unknown, method = 'POST'): Pro
   })
   const result = await response.json() as T & { error?: string }
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/auth/')) {
+    if (response.status === 401 && !['/auth/login', '/auth/setup', '/auth/logout', '/auth/session'].includes(path)) {
       window.dispatchEvent(new Event('gallery-session-expired'))
     }
     throw new Error(result.error || '请求失败，请稍后再试')

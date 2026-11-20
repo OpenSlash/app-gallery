@@ -24,6 +24,7 @@
 - 首次上线日期补录，暂停、恢复、下线、发布和备注时间线。
 - 下线或未上线应用归档；数据保留，首页隐藏。
 - D1 数据持久化、API 校验、内置管理员密码登录与未配置时安全锁定。
+- 仅允许添加应用的 API Token，支持到期时间、查看调用时间和撤销。
 
 当前每个应用只管理一个生产部署、一个访问地址。多环境、多入口、
 迁移、导入导出、在线监测及文件上传不在这一轮实现。
@@ -171,6 +172,7 @@ D1 密码一旦创建，优先级高于旧 Secret，遗留 Secret 不会覆盖�
 ```sql
 DELETE FROM admin_credentials;
 DELETE FROM auth_sessions;
+DELETE FROM api_tokens;
 ```
 
 移除遗留的运行时和构建 `ADMIN_PASSWORD`，立即在页面创建新密码，再恢复访问。
@@ -192,7 +194,46 @@ DELETE FROM auth_sessions;
 `/api/v1/auth/logout` 分别用于检查状态、登录和退出。
 `POST /api/v1/auth/setup` 接收 `password` 与 `confirmPassword`，仅首次初始化可用，
 保存后需正常登录，不会自动创建会话。
-目前没有独立 API Token 或 CI 自动化认证能力。
+
+### 使用 API Token 添加应用
+
+登录后点击顶部 **API Token**，填写名称，选择 7、30（默认）、90 或 365 天有效期。
+Token 明文仅在创建时显示一次，不写入浏览器存储，之后无法再次读取。
+D1 只保存 SHA-256 哈希、展示前缀、元数据和绑定当前管理员凭据的校验值。
+请存入密码管理器或脚本 / CI 的机密存储，不要放入源码、网址、截图或聊天消息。
+
+将 Token 设置为环境变量 `APP_GALLERY_TOKEN`，将示例域名替换为自己的站点：
+
+```sh
+curl --fail-with-body 'https://your-worker.workers.dev/api/v1/applications' \
+  -H "Authorization: Bearer $APP_GALLERY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"My App","url":"https://example.com","type":"website","launchedOn":"2026-01-01"}'
+```
+
+成功返回 HTTP 201 和 `{ "id": "..." }`。必填字段为 `name`、`url` 和 `type`
+（`website` / `service` / `app`）；`url` 必须为不含账号密码的 HTTP 或 HTTPS 地址。
+可选字段有 `description`、`category`、`tags`、`icon`、`color`、`size`、`favorite`
+和 `launchedOn`（UTC `YYYY-MM-DD`，不能在未来；省略或 null 表示未上线）。
+每次请求都会新增应用，不自动去重。
+
+Token 只能调用 `POST /api/v1/applications`，不能读取目录、编辑、归档、
+修改生命周期或管理 Token。生产必须使用 HTTPS，本地回环地址除外。
+脚本无需 Cookie 或 Origin；跨域浏览器请求仍被阻止，不开放宽泛 CORS。
+携带无效 Authorization 时不会回退到浏览器登录身份。
+
+管理页最多展示 100 个 Token，未过期且未撤销的 Token 优先，其余按创建时间倒序，
+包含状态、到期和最近认证调用时间
+（也可能包含认证通过但输入校验失败的请求）。撤销后后续调用失效，
+退出浏览器登录不会撤销 Token；管理员密码凭据变更会使旧 Token 失效。
+最多保留 20 个未过期且未撤销的 Token，旧凭据失效的 Token 也应及时撤销。
+仅启用本地开发绕过不能创建 Token，需要先设置真实管理员密码。
+
+管理接口仅接受同源管理员会话：
+`GET /api/v1/auth/tokens`、
+`POST /api/v1/auth/tokens`（`name` 与 `expiresInDays`），
+以及 `POST /api/v1/auth/tokens/:id/revoke`（空 JSON 对象）。
+Bearer Token 不能调用这些管理接口。升级时使用 `pnpm run deploy` 自动迁移 Token 表。
 
 应用界面目前为简体中文；双语支持仅限 README，并非完整的界面国际化。
 详细架构见 [技术方案](docs/technical-design.md)，其中包含尚未实现的后续规划。

@@ -1,5 +1,6 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse } from 'jsonc-parser'
@@ -40,7 +41,15 @@ const run = (command: string, args: string[]) => {
   if (step === 'execute') {
     expect(args.slice(0, 8)).toEqual(['d1', 'execute', 'DB', '--remote', '--config', source(), '--command', expect.any(String)])
     expect(args[7]).toContain('admin_credentials')
+    expect(args[7]).toContain('api_tokens')
     expect(args[7]).toContain('LIMIT 0')
+    const database = new DatabaseSync(':memory:')
+    try {
+      for (const name of readdirSync(new URL('../../drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
+        database.exec(readFileSync(new URL(`../../drizzle/${name}`, import.meta.url), 'utf8'))
+      }
+      expect(database.prepare(args[7]).all()).toEqual([])
+    } finally { database.close() }
   }
   if (step === 'build' && !staleBuild) {
     mkdirSync(join(root, 'dist/worker'), { recursive: true })

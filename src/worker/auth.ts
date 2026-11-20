@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { passwordConfigurationIssue } from '../shared/auth'
+import { apiTokenInput, type ApiTokenSummary } from '../shared/api-tokens'
 
 export interface Env {
   DB: D1Database
@@ -14,6 +15,10 @@ type Session = { credential_tag: string; expires_at: number }
 type Credential = { sessionKey: string; verify: (password: string) => Promise<boolean> }
 type StoredCredential = {
   password_hash: string; salt: string; iterations: number; session_secret: string
+}
+type StoredApiToken = {
+  id: string; name: string; token_prefix: string; credential_tag: string
+  created_at: number; expires_at: number; last_used_at: number | null; revoked_at: number | null
 }
 const lifetime = 12 * 60 * 60
 const passwordIterations = 100_000
@@ -41,6 +46,18 @@ const sessionToken = (c: Context<AuthEnv>) => {
 const passwordKey = (password: string) => crypto.subtle.importKey(
   'raw', encoder.encode(password), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify'],
 )
+
+async function credentialTag(key: string, value: string) {
+  return hex(await crypto.subtle.sign('HMAC', await passwordKey(key), encoder.encode(value)))
+}
+
+async function validCredentialTag(key: string, value: string, tag: string) {
+  return /^[a-f0-9]{64}$/.test(tag) &&
+    crypto.subtle.verify('HMAC', await passwordKey(key), bytes(tag), encoder.encode(value))
+}
+
+export const isTokenCreateRequest = (method: string, path: string) =>
+  method === 'POST' && path === '/api/v1/applications'
 
 async function passwordMatches(expected: string, provided: string) {
   // Compare fixed-size MACs through Web Crypto instead of comparing secret strings.
@@ -96,7 +113,34 @@ async function authenticated(c: Context<AuthEnv>, current: Credential | null) {
 }
 
 export const authentication = createMiddleware<AuthEnv>(async (c, next) => {
-  const path = new URL(c.req.url).pathname
+  const url = new URL(c.req.url)
+  const path = url.pathname
+  const authorization = c.req.header('Authorization')
+  // A supplied credential is authoritative; never fall back to cookies or local bypass.
+  if (authorization !== undefined) {
+    if (!isTokenCreateRequest(c.req.method, path)) return c.json({ error: 'API Token 仅允许添加应用。' }, 403)
+    if (url.protocol !== 'https:' && !localHost(url)) return c.json({ error: 'API Token 必须使用 HTTPS。' }, 400)
+    const token = authorization.replace(/^Bearer /i, '')
+    if (!/^Bearer /i.test(authorization) || !/^ag_[a-f0-9]{64}$/.test(token)) {
+      return c.json({ error: 'API Token 无效或已失效。' }, 401)
+    }
+    const current = await credential(c)
+    if (!current) return c.json({ error: '请先设置管理员密码。' }, 503)
+    const now = Date.now()
+    const stored = await c.env.DB.prepare(
+      'SELECT id, credential_tag FROM api_tokens WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?',
+    ).bind(await digest(token), now).first<{ id: string; credential_tag: string }>()
+    if (!stored || !await validCredentialTag(current.sessionKey, `api-token:${stored.id}`, stored.credential_tag)) {
+      return c.json({ error: 'API Token 无效或已失效。' }, 401)
+    }
+    const used = await c.env.DB.prepare(
+      'UPDATE api_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL AND expires_at>? RETURNING id',
+    ).bind(now, stored.id, now).first<{ id: string }>()
+    if (!used) return c.json({ error: 'API Token 无效或已失效。' }, 401)
+    c.set('actor', `api-token:${stored.id}`)
+    await next()
+    return
+  }
   if ((c.req.method === 'GET' && path === '/api/v1/auth/session') ||
       (c.req.method === 'POST' && ['/api/v1/auth/setup', '/api/v1/auth/login', '/api/v1/auth/logout'].includes(path))) {
     return next()
@@ -182,5 +226,55 @@ authRoutes.post('/logout', async c => {
   const token = sessionToken(c)
   if (token) await c.env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash=?').bind(await digest(token)).run()
   deleteCookie(c, cookieName(c), cookieOptions(c))
+  return c.json({ ok: true })
+})
+
+authRoutes.get('/tokens', async c => {
+  const current = await credential(c)
+  if (!current) return c.json({ error: '请先设置真实管理员密码，再管理 API Token。' }, 503)
+  const rows = await c.env.DB.prepare(`
+    SELECT id, name, token_prefix, credential_tag, created_at, expires_at, last_used_at, revoked_at
+    FROM api_tokens
+    ORDER BY CASE WHEN revoked_at IS NULL AND expires_at>? THEN 0 ELSE 1 END, created_at DESC, id DESC
+    LIMIT 100
+  `).bind(Date.now()).all<StoredApiToken>()
+  const items: ApiTokenSummary[] = await Promise.all(rows.results.map(async row => ({
+    id: row.id, name: row.name, prefix: row.token_prefix, scope: 'applications:create' as const,
+    createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, revokedAt: row.revoked_at,
+    invalidated: !await validCredentialTag(current.sessionKey, `api-token:${row.id}`, row.credential_tag),
+  })))
+  return c.json({ items })
+})
+
+authRoutes.post('/tokens', async c => {
+  const url = new URL(c.req.url)
+  if (url.protocol !== 'https:' && !localHost(url)) return c.json({ error: '创建 API Token 必须使用 HTTPS。' }, 400)
+  const current = await credential(c)
+  if (!current) return c.json({ error: '请先设置真实管理员密码，再创建 API Token。' }, 503)
+  const input = apiTokenInput.parse(await c.req.json())
+  const now = Date.now()
+  const id = crypto.randomUUID()
+  const token = `ag_${hex(crypto.getRandomValues(new Uint8Array(32)))}`
+  const expiresAt = now + input.expiresInDays * 86_400_000
+  const tag = await credentialTag(current.sessionKey, `api-token:${id}`)
+  // Keep the active-token quota atomic, including when multiple administrators create tokens.
+  const inserted = await c.env.DB.prepare(`
+    INSERT INTO api_tokens (id, name, token_hash, token_prefix, credential_tag, created_at, expires_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?
+    WHERE (SELECT COUNT(*) FROM api_tokens WHERE revoked_at IS NULL AND expires_at>?) < 20
+    RETURNING id
+  `).bind(id, input.name, await digest(token), token.slice(0, 11), tag, now, expiresAt, now).first<{ id: string }>()
+  if (!inserted) return c.json({ error: '最多保留 20 个未过期且未撤销的 Token，请先撤销旧 Token。' }, 409)
+  return c.json({ token, item: {
+    id, name: input.name, prefix: token.slice(0, 11), scope: 'applications:create',
+    createdAt: now, expiresAt, lastUsedAt: null, revokedAt: null, invalidated: false,
+  } satisfies ApiTokenSummary }, 201)
+})
+
+authRoutes.post('/tokens/:id/revoke', async c => {
+  const result = await c.env.DB.prepare(
+    'UPDATE api_tokens SET revoked_at=COALESCE(revoked_at, ?) WHERE id=? RETURNING id',
+  ).bind(Date.now(), c.req.param('id')).first<{ id: string }>()
+  if (!result) return c.json({ error: 'Token 不存在。' }, 404)
   return c.json({ ok: true })
 })

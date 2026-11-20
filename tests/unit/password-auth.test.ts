@@ -12,14 +12,17 @@ let limit: Mock<RateLimit['limit']>
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:')
+  sqlite.exec(readFileSync(new URL('../../drizzle/0001_initial.sql', import.meta.url), 'utf8'))
   sqlite.exec(readFileSync(new URL('../../drizzle/0002_auth_sessions.sql', import.meta.url), 'utf8'))
   sqlite.exec(readFileSync(new URL('../../drizzle/0003_admin_credentials.sql', import.meta.url), 'utf8'))
+  sqlite.exec(readFileSync(new URL('../../drizzle/0004_api_tokens.sql', import.meta.url), 'utf8'))
   const DB = {
     prepare(sql: string) {
       let args: SQLInputValue[] = []
       return {
         bind(...values: SQLInputValue[]) { args = values; return this },
         async first() { return sqlite.prepare(sql).get(...args) ?? null },
+        async all() { return { results: sqlite.prepare(sql).all(...args) } },
         async run() { return sqlite.prepare(sql).run(...args) },
       }
     },
@@ -296,5 +299,158 @@ describe('部署故障诊断', () => {
       expect(body.error).toContain(body.requestId)
       expect(body.error).not.toContain('private internal details')
     } finally { prepare.mockRestore(); log.mockRestore() }
+  })
+})
+
+describe('仅添加应用的 API Token', () => {
+  async function issue(cookie?: string, input: unknown = { name: 'test integration', expiresInDays: 30 }) {
+    const session = cookie ?? await login()
+    const response = await post('/auth/tokens', input, session)
+    expect(response.status).toBe(201)
+    return await response.json() as { token: string; item: { id: string; prefix: string; expiresAt: number } }
+  }
+  function add(token: string, extraHeaders: Record<string, string> = {}, input: unknown = {
+    name: 'from API', url: 'https://example.com', type: 'website', launchedOn: '2026-01-01',
+  }) {
+    return request('/applications', { method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...extraHeaders },
+      body: JSON.stringify(input),
+    })
+  }
+  it('未登录不能创建、查看或撤销 Token；管理写入仍校验 Origin', async () => {
+    expect((await request('/auth/tokens')).status).toBe(401)
+    expect((await post('/auth/tokens', { name: 'unauthenticated' })).status).toBe(401)
+    expect((await post('/auth/tokens/missing/revoke')).status).toBe(401)
+    const cookie = await login()
+    expect((await request('/auth/tokens', {
+      method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{"name":"unsafe"}',
+    })).status).toBe(403)
+  })
+  it('明文只在创建时返回，D1 和列表只保存或展示非敏感字段', async () => {
+    const cookie = await login()
+    const { token, item } = await issue(cookie)
+    expect(token).toMatch(/^ag_[a-f0-9]{64}$/)
+    const stored = sqlite.prepare('SELECT * FROM api_tokens').get()!
+    expect(stored.token_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(stored.token_prefix).toBe(item.prefix)
+    expect(JSON.stringify(stored)).not.toContain(token)
+    const response = await request('/auth/tokens', { headers: { Cookie: cookie } })
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    const body = await response.json() as { items: Record<string, unknown>[] }
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0]).toMatchObject({ id: item.id, scope: 'applications:create', invalidated: false })
+    for (const field of ['token', 'token_hash', 'credential_tag']) expect(body.items[0]).not.toHaveProperty(field)
+    expect(JSON.stringify(body)).not.toContain(token)
+  })
+  it('Bearer 无需浏览器 Cookie 或 Origin 即可添加应用，并记录来源和调用时间', async () => {
+    const { token, item } = await issue()
+    const response = await add(token)
+    expect(response.status).toBe(201)
+    const { id } = await response.json() as { id: string }
+    expect(sqlite.prepare('SELECT name FROM applications WHERE id=?').get(id)!.name).toBe('from API')
+    expect(sqlite.prepare('SELECT actor FROM events').get()!.actor).toBe(`api-token:${item.id}`)
+    expect(sqlite.prepare('SELECT last_used_at FROM api_tokens').get()!.last_used_at).toBeTypeOf('number')
+  })
+  it('不允许 Token 读取、修改、归档、退出或管理 Token', async () => {
+    const { token } = await issue()
+    for (const [method, path] of [
+      ['GET', '/applications'], ['GET', '/auth/tokens'], ['GET', '/auth/session'],
+      ['POST', '/auth/tokens'], ['POST', '/auth/tokens/fake/revoke'], ['POST', '/auth/logout'],
+      ['PUT', '/applications/fake'], ['POST', '/applications/fake/archive'],
+      ['POST', '/deployments/fake/transitions'],
+    ]) {
+      const response = await request(path, { method, headers: {
+        Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json',
+      }, ...(method === 'GET' ? {} : { body: '{}' }) })
+      expect(response.status, `${method} ${path}`).toBe(403)
+    }
+  })
+  it('无效 Token 不回退到 Cookie 或本地开发身份；无认证仍要求同源', async () => {
+    const cookie = await login()
+    for (const token of ['bad', `ag_${'a'.repeat(64)}`]) {
+      expect((await add(token, { Cookie: cookie, Origin: origin })).status).toBe(401)
+    }
+    const local = await worker.request('http://localhost/api/v1/applications', {
+      method: 'POST', headers: { Authorization: 'Bearer bad', 'Content-Type': 'application/json' }, body: '{}',
+    }, { ...env, LOCAL_DEV: 'true' })
+    expect(local.status).toBe(401)
+    expect((await request('/applications', { method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}',
+    })).status).toBe(403)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM applications').get()!.count).toBe(0)
+  })
+  it('撤销、到期以及管理员密码变更均使 Token 失效', async () => {
+    const cookie = await login()
+    const first = await issue(cookie)
+    expect((await post(`/auth/tokens/${first.item.id}/revoke`, {}, cookie)).status).toBe(200)
+    expect((await post(`/auth/tokens/${first.item.id}/revoke`, {}, cookie)).status).toBe(200)
+    expect((await add(first.token)).status).toBe(401)
+    const expired = await issue(cookie)
+    sqlite.prepare('UPDATE api_tokens SET expires_at=0 WHERE id=?').run(expired.item.id)
+    expect((await add(expired.token)).status).toBe(401)
+    const old = await issue(cookie)
+    env.ADMIN_PASSWORD = 'a-different-admin-password'
+    expect((await add(old.token)).status).toBe(401)
+    const response = await post('/auth/login', { password: env.ADMIN_PASSWORD })
+    const newCookie = response.headers.get('Set-Cookie')!.split(';')[0]
+    const list = await (await request('/auth/tokens', { headers: { Cookie: newCookie } })).json() as {
+      items: { id: string; invalidated: boolean }[]
+    }
+    expect(list.items.find(item => item.id === old.item.id)!.invalidated).toBe(true)
+    expect((await post('/auth/tokens/missing/revoke', {}, newCookie)).status).toBe(404)
+  })
+  it('退出浏览器不会撤销独立 Token，但重新初始化 D1 密码会', async () => {
+    env.ADMIN_PASSWORD = undefined
+    expect((await post('/auth/setup', { password, confirmPassword: password })).status).toBe(201)
+    const cookie = await login()
+    const { token } = await issue(cookie)
+    await post('/auth/logout', {}, cookie)
+    expect((await add(token)).status).toBe(201)
+    sqlite.exec('DELETE FROM admin_credentials')
+    await post('/auth/setup', { password, confirmPassword: password })
+    expect((await add(token)).status).toBe(401)
+  })
+  it('Token 调用仍要求 HTTPS、JSON、合法输入和请求大小限制', async () => {
+    const { token } = await issue()
+    expect((await add(token, { Origin: 'https://evil.example.com' })).status).toBe(403)
+    expect((await add(token, { 'Content-Type': 'text/plain' })).status).toBe(415)
+    expect((await add(token, {}, { name: 'bad', url: 'javascript:alert(1)', type: 'website' })).status).toBe(400)
+    expect((await add(token, {}, { name: 'future', url: 'https://example.com', type: 'website', launchedOn: '2099-01-01' })).status).toBe(400)
+    expect((await add(token, {}, { description: 'x'.repeat(17000) })).status).toBe(413)
+    const http = await worker.request('http://gallery.example.com/api/v1/applications', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}',
+    }, env)
+    expect(http.status).toBe(400)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM applications').get()!.count).toBe(0)
+  })
+  it('校验名称、有效期，原子限制 20 个有效 Token', async () => {
+    const cookie = await login()
+    for (const input of [{ name: ' ' }, { name: 'x'.repeat(81) }, { name: 'bad expiry', expiresInDays: 0 },
+      { name: 'bad expiry', expiresInDays: 10000 }]) {
+      expect((await post('/auth/tokens', input, cookie)).status).toBe(400)
+    }
+    for (let i = 0; i < 19; i++) await issue(cookie)
+    const responses = await Promise.all([
+      post('/auth/tokens', { name: 'concurrent A', expiresInDays: 7 }, cookie),
+      post('/auth/tokens', { name: 'concurrent B', expiresInDays: 7 }, cookie),
+    ])
+    expect(responses.map(response => response.status).sort()).toEqual([201, 409])
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM api_tokens').get()!.count).toBe(20)
+    const row = sqlite.prepare('SELECT id FROM api_tokens LIMIT 1').get()!
+    await post(`/auth/tokens/${row.id}/revoke`, {}, cookie)
+    const { item } = await issue(cookie, { name: 'replacement', expiresInDays: 7 })
+    expect(item.expiresAt).toBeGreaterThan(Date.now() + 6 * 86_400_000)
+  })
+  it('大量历史 Token 不会挤掉仍可使用的 Token，保证可以从列表撤销', async () => {
+    const cookie = await login()
+    const { item } = await issue(cookie)
+    const insert = sqlite.prepare(`INSERT INTO api_tokens
+      (id, name, token_hash, token_prefix, credential_tag, created_at, expires_at, revoked_at)
+      VALUES (?, 'old history', ?, 'ag_history', ?, ?, 0, 1)`)
+    for (let i = 0; i < 105; i++) insert.run(`history-${i}`, `hash-${i}`, '0'.repeat(64), Date.now() + i)
+    const response = await request('/auth/tokens', { headers: { Cookie: cookie } })
+    const body = await response.json() as { items: { id: string }[] }
+    expect(body.items).toHaveLength(100)
+    expect(body.items[0].id).toBe(item.id)
   })
 })

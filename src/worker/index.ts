@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { drizzle } from 'drizzle-orm/d1'
 import { applications } from './db/schema'
 import { appInput, nextStatus, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
-import { authentication, authRoutes, type Env } from './auth'
+import { authentication, authRoutes, isTokenCreateRequest, type Env } from './auth'
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>()
 
@@ -10,7 +10,10 @@ app.use('/api/*', async (c, next) => {
   c.header('Cache-Control', 'no-store')
   const url = new URL(c.req.url)
   if (!['GET', 'HEAD'].includes(c.req.method)) {
-    if (c.req.header('Origin') !== url.origin) return c.json({ error: '请求来源不被允许。' }, 403)
+    const origin = c.req.header('Origin')
+    const tokenRequest = origin === undefined && c.req.header('Authorization') !== undefined &&
+      isTokenCreateRequest(c.req.method, url.pathname)
+    if (origin !== url.origin && !tokenRequest) return c.json({ error: '请求来源不被允许。' }, 403)
     if (!c.req.header('Content-Type')?.startsWith('application/json')) return c.json({ error: '请使用 JSON 请求。' }, 415)
     const length = Number(c.req.header('Content-Length') ?? 0)
     if (length > 16_384) return c.json({ error: '请求内容过大。' }, 413)

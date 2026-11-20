@@ -24,6 +24,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 svg { width: 18px; height: 18px; flex-shrink: 0; }
 .workspace { position: relative; min-height: 100dvh; padding: 0 5.2%; isolation: isolate; overflow: clip; background: #fff; }
 .topbar { height: 80px; display: flex; justify-content: space-between; align-items: center; max-width: 1440px; margin: auto; border-bottom: 1px solid var(--line); }
+.header-actions { display: flex; align-items: center; gap: 4px; }
+.header-actions .button { padding-inline: 10px; }
+.dialog.tokens-dialog { width: min(640px, calc(100vw - 32px)); }
+.tokens-intro, .token-example p, .token-secret p { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.token-create { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 14px; margin: 24px 0; }
+.token-create > label { display: grid; align-content: start; gap: 8px; min-width: 0; font-size: 11px; color: #78876c; }
+.token-create > button { grid-column: 1 / -1; justify-self: start; }
+.token-secret { background: #f6f8f5; border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 20px 0; }
+.token-secret strong { font-size: 13px; }
+.token-secret textarea { display: block; width: 100%; padding: 10px; border: 1px solid #d9dfd3; border-radius: 8px; background: #fff; font-family: monospace; font-size: 12px; overflow-wrap: anywhere; resize: vertical; }
+.token-secret-actions, .tokens-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
+.tokens-heading h3 { font-size: 13px; margin: 0; }
+.token-list { list-style: none; padding: 0; margin: 0; }
+.token-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.token-meta { display: grid; gap: 6px; min-width: 0; font-size: 11px; color: var(--muted); }
+.token-meta strong { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.token-meta code { color: var(--ink); }
+.token-example { margin-top: 22px; font-size: 12px; }
+.token-example summary { cursor: pointer; padding: 10px 0; }
+.token-example pre { max-width: 100%; overflow: auto; padding: 14px; background: #f6f8f5; border-radius: 8px; font-size: 11px; line-height: 1.7; }
 .brand { display: flex; align-items: center; gap: 11px; font-size: 22px; font-weight: 650; letter-spacing: -.8px; }
 .brand-symbol { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; color: #fcfcf5; background: #365746; box-shadow: inset 0 1px 1px #fff3, 0 3px 6px #233c2512; }
 .brand-symbol svg { width: 20px; height: 20px; }
