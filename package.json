@@ -1,0 +1,70 @@
+{
+  "name": "app-gallery",
+  "version": "0.1.0",
+  "description": "A private app launchpad and lifecycle log, built on Cloudflare Workers and D1.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenSlash/app-gallery.git"
+  },
+  "homepage": "https://github.com/OpenSlash/app-gallery#readme",
+  "bugs": {
+    "url": "https://github.com/OpenSlash/app-gallery/issues"
+  },
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.2",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "seed:local": "wrangler d1 migrations apply DB --local && wrangler d1 execute DB --local --file seeds/local.sql",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "tsc --noEmit",
+    "deploy:button": "node scripts/deploy-button.mjs"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Stores applications, deployments, and lifecycle history. Create a new D1 database for your instance."
+      },
+      "ACCESS_TEAM_DOMAIN": {
+        "description": "Your Access team domain, e.g. my-team.cloudflareaccess.com. The API stays locked until configured."
+      },
+      "ACCESS_AUD": {
+        "description": "The Application Audience (AUD) tag of your Cloudflare Access application."
+      }
+    }
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@radix-ui/react-alert-dialog": "^1.2.1",
+    "@radix-ui/react-checkbox": "^1.4.1",
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-icons": "^1.3.2",
+    "@radix-ui/react-select": "^2.4.1",
+    "@radix-ui/react-slider": "^1.6.1",
+    "@radix-ui/react-tooltip": "^1.4.1",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.19",
+    "jose": "^6.2.17",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.70.0",
+    "@cloudflare/workers-types": "^5.20261117.1",
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.164.0"
+  }
+}
