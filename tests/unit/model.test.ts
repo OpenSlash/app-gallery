@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appInput, elapsedDays, matchesSearch, nextStatus, utcDateStart, type AppRecord } from '../../src/shared/model'
+import { appInput, elapsedDays, matchesSearch, nextStatus, patchInput, utcDateStart, type AppRecord } from '../../src/shared/model'
 
 describe('生命周期', () => {
   it('首次上线、暂停、恢复、下线', () => {
@@ -34,6 +34,23 @@ describe('时间口径', () => {
 })
 
 describe('输入与搜索', () => {
+  it('PATCH 不给省略的字段填默认值，不允许空修改或生命周期字段', () => {
+    expect(patchInput.parse({ revision: 2, name: 'renamed' })).toEqual({ revision: 2, name: 'renamed' })
+    expect(patchInput.safeParse({ revision: 2 }).success).toBe(false)
+    expect(patchInput.safeParse({ revision: 2, launchedOn: '2026-01-01' }).success).toBe(false)
+  })
+  it('网站图标兼容旧输入，并限制为 HTTPS 或已上传图片路径', () => {
+    const data = { name: '工具', type: 'website', url: 'https://example.com' }
+    expect(appInput.parse(data).iconUrl).toBe('')
+    for (const iconUrl of ['', 'https://example.com/logo.svg?v=1', '/api/v1/icons/71a1baef-2fde-4cc0-83a5-e2b97615d538']) {
+      expect(appInput.safeParse({ ...data, iconUrl }).success).toBe(true)
+    }
+    for (const iconUrl of ['http://example.com/icon.png', '//example.com/icon.png',
+      'https://user:password@example.com/logo.png', 'javascript:alert(1)', 'data:image/svg+xml,<svg/>',
+      '/api/v1/auth/logout', '/app-icons/allure.svg', '/api/v1/icons/not-a-uuid', '/api/v1/icons/../auth/session']) {
+      expect(appInput.safeParse({ ...data, iconUrl }).success).toBe(false)
+    }
+  })
   it('只允许不带凭据的 HTTP 地址', () => {
     const data = { name: '工具', type: 'website' }
     expect(appInput.safeParse({ ...data, url: 'https://example.com' }).success).toBe(true)

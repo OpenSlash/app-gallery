@@ -63,7 +63,7 @@ export function AppDetails({ app, asOf, onClose, onEdit, onUpdate, onRefresh, de
     } catch (error) { setConfirmError((error as Error).message) } finally { setBusy(false) }
   }
   return <Dialog title="应用详情" onClose={onClose} className="details-dialog" dismissible={!busy}>
-    <div className="detail-identity"><AppIcon icon={app.icon} color={app.color} /><div><h3>{app.name}</h3>
+    <div className="detail-identity"><AppIcon icon={app.icon} color={app.color} iconUrl={app.iconUrl} /><div><h3>{app.name}</h3>
       <span className={`status status-${app.status}`}><i />{statusLabels[app.status]}</span><span className="detail-type">{typeLabels[app.type]} · 生产环境</span></div></div>
     <p className="detail-description">{app.description || '还没有填写应用介绍。'}</p>
     <div className="detail-actions"><a className="button primary" href={app.url} target="_blank" rel="noopener noreferrer">打开应用 <ArrowTopRightIcon /></a>

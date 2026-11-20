@@ -223,21 +223,25 @@ wrangler.jsonc
   不保存明文。原子插入防止重复或并发设置覆盖密码。
 - 首次初始化不验证 Cloudflare 账号归属，部署后应立即设置，敏感实例需临时限制访问。
 - 兼容旧 `ADMIN_PASSWORD` Secret；已有 D1 凭据优先，无 D1 凭据且 Secret 有效时关闭初始化。
-- 支持仅限添加应用的 Bearer API Token，随机 256 位，D1 仅存哈希、前缀及元数据。
+- 支持应用读写 Bearer API Token，随机 256 位，D1 仅存哈希、前缀及元数据。
   管理页仅创建时展示明文，支持到期及撤销；凭据绑定使密码重置后旧 Token 失效。
-  Token 不能读取目录、修改应用或管理其他 Token，签发和撤销仍要求同源管理员会话。
+  Token 可新增、读取单个已知应用、通过 PUT/PATCH 编辑资料以及上传和读取图标；
+  不能读取目录、归档、修改生命周期或管理其他 Token，签发和撤销仍要求同源管理员会话。
+  升级后现有 Token 也拥有编辑权限，界面和双语文档明确提示这一变化。
 - API 验证服务器端会话；HTTPS Cookie 使用 HttpOnly、Secure、SameSite=Strict，
   会话有效期为 12 小时，D1 仅保存令牌哈希和绑定当前密码的校验值。
 - 退出撤销当前会话，修改密码使旧密码签发的会话失效；没有公开注册或网页重置入口。
 - 登录和首次设置共用 Workers 限流绑定，按 IP 和节点约每分钟 5 次；不是全局严格配额。
 - 保留 `workers.dev` 访问入口，数据 API 独立认证；默认关闭动态预览 URL。
 - 本地身份模拟只允许在明确的本地配置启用，生产环境缺失认证配置时拒绝访问。
-- 写接口校验 Origin，要求 JSON Content-Type，不启用宽泛 CORS。
-  仅 `POST /api/v1/applications` 允许无 Origin 的脚本请求，并必须验证 Bearer Token；
+- 写接口校验 Origin，资料接口要求 JSON，图标上传要求实际图片 Content-Type，不启用宽泛 CORS。
+  指定的应用读写和图标接口允许无 Origin 的脚本请求，并必须验证 Bearer Token；
   无效 Authorization 不回退到 Cookie 或本地开发身份。
 - 私有 API 使用 `Cache-Control: no-store`，不写入公共 CDN 缓存。
 - React 文本转义输出，不渲染任意 HTML；外链新窗口使用安全 rel 属性。
 - 第一版不服务端抓取用户输入 URL，不自动下载远程图标，避免 SSRF。
+- 上传图标限制 256 KiB，按内容哈希去重，以 BLOB 保存到 D1，不捆绑个人服务图标或要求 R2。
+  图片需认证读取，设置 nosniff、同源资源策略及 sandbox CSP，拒绝 SVG 中的脚本和外部引用。
 - 日志记录请求 ID、耗时、结果，不记录身份令牌、完整导出内容或敏感查询参数。
 
 本地、预览和生产应使用不同 D1 数据库及管理员密码。

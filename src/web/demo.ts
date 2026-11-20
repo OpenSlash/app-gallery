@@ -15,7 +15,7 @@ const entries = [
 export function demoApps(): AppRecord[] {
   return entries.map(([name, description, icon, color, type, category, size], index) => ({
     id: `demo-${index}`, deploymentId: `demo-${index}`, name, description, icon, color, type, category, size,
-    tags: ['示例'], url: 'https://example.com', launchedOn: `2026-0${(index % 8) + 1}-01`,
+    tags: ['示例'], url: 'https://example.com', iconUrl: '', launchedOn: `2026-0${(index % 8) + 1}-01`,
     favorite: index < 5, status: index === 5 ? 'paused' : 'active',
     revision: 0, createdAt: 0, retiredAt: null, activeMs: (index + 20) * 86_400_000, archived: false,
   }))

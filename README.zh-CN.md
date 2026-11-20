@@ -213,14 +213,46 @@ curl --fail-with-body 'https://your-worker.workers.dev/api/v1/applications' \
 
 成功返回 HTTP 201 和 `{ "id": "..." }`。必填字段为 `name`、`url` 和 `type`
 （`website` / `service` / `app`）；`url` 必须为不含账号密码的 HTTP 或 HTTPS 地址。
-可选字段有 `description`、`category`、`tags`、`icon`、`color`、`size`、`favorite`
+可选字段有 `description`、`category`、`tags`、`icon`、`iconUrl`、`color`、`size`、`favorite`
 和 `launchedOn`（UTC `YYYY-MM-DD`，不能在未来；省略或 null 表示未上线）。
 每次请求都会新增应用，不自动去重。
 
-Token 只能调用 `POST /api/v1/applications`，不能读取目录、编辑、归档、
-修改生命周期或管理 Token。生产必须使用 HTTPS，本地回环地址除外。
+### 上传应用图标
+
+在应用编辑器中上传图标并保存应用。支持 PNG、JPEG、WebP、ICO 和静态 SVG，
+最大 256 KiB。图片数据保存到 D1，按内容哈希去重，通过需认证的
+`/api/v1/icons/:id` 地址读取，不在代码仓库中捆绑品牌图片，也不需要配置 R2。
+上传文件是独立资源，取消编辑不会删除已经上传的图片。
+
+图标显示在启动台、卡片、详情、编辑预览和 Dock 中；加载失败时回退到内置图标。
+选择 Radix 内置图标会清空 `iconUrl`。仍可选填不含账号密码的 HTTPS 图片地址，
+请求不会发送 Referer，但远程图片服务仍可获取访问者 IP。
+HTTP 服务的图标请下载后上传，避免混合内容；服务端不会抓取任意地址。
+SVG 响应使用 sandbox 和严格 CSP，拒绝含脚本或外部资源的 SVG。
+
+使用 `pnpm run deploy`，会在发布前自动迁移图标字段和上传图片表。
+已有应用不会自动修改，需要保存上传后返回的 `iconUrl`。
+
+### API Token 权限
+
+Token 权限为 `applications:write`。**升级后现有 Token 也获得以下权限**；
+如不希望旧脚本拥有编辑能力，请在升级前撤销对应 Token。
+
+- `POST /api/v1/applications`：添加应用。
+- `GET /api/v1/applications/:id`：读取单个已知应用及其版本号。
+- `PUT /api/v1/applications/:id`：替换可编辑资料，必须提供 `revision`。
+- `PATCH /api/v1/applications/:id`：只修改提交的字段，必须提供 `revision`。
+- `POST /api/v1/icons`：上传图片原始字节，Content-Type 为实际图片类型。
+- `GET /api/v1/icons/:id`：读取上传图标。
+
+Token 仍不能读取应用目录、归档、修改生命周期或管理 Token。
+生产必须使用 HTTPS，本地回环地址除外。
 脚本无需 Cookie 或 Origin；跨域浏览器请求仍被阻止，不开放宽泛 CORS。
 携带无效 Authorization 时不会回退到浏览器登录身份。
+
+编辑前通过单个应用 GET 获取 `revision`；版本冲突返回 HTTP 409，不覆盖其他修改。
+PATCH 不修改上线日期或生命周期，没有提交的资料字段保持不变。
+先上传图片，再把返回的 `iconUrl` 写入应用；上传和编辑示例见英文 README。
 
 管理页最多展示 100 个 Token，未过期且未撤销的 Token 优先，其余按创建时间倒序，
 包含状态、到期和最近认证调用时间

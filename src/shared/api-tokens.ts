@@ -9,7 +9,7 @@ export interface ApiTokenSummary {
   id: string
   name: string
   prefix: string
-  scope: 'applications:create'
+  scope: 'applications:write'
   createdAt: number
   expiresAt: number
   lastUsedAt: number | null

@@ -1,24 +1,35 @@
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { drizzle } from 'drizzle-orm/d1'
 import { applications } from './db/schema'
-import { appInput, nextStatus, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
-import { authentication, authRoutes, isTokenCreateRequest, type Env } from './auth'
+import { appInput, nextStatus, patchInput, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
+import { authentication, authRoutes, isTokenRequest, type Env } from './auth'
+import { iconContentTypes, maxIconBytes } from '../shared/icons'
+import { iconRoutes } from './icons'
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>()
 
+app.use('/api/*', async (c, next) => {
+  const maxSize = c.req.method === 'POST' && c.req.path === '/api/v1/icons' ? maxIconBytes : 16_384
+  return bodyLimit({ maxSize, onError: c => c.json({ error: '请求内容过大。' }, 413) })(c, next)
+})
 app.use('/api/*', async (c, next) => {
   c.header('Cache-Control', 'no-store')
   const url = new URL(c.req.url)
   if (!['GET', 'HEAD'].includes(c.req.method)) {
     const origin = c.req.header('Origin')
     const tokenRequest = origin === undefined && c.req.header('Authorization') !== undefined &&
-      isTokenCreateRequest(c.req.method, url.pathname)
+      isTokenRequest(c.req.method, url.pathname)
     if (origin !== url.origin && !tokenRequest) return c.json({ error: '请求来源不被允许。' }, 403)
-    if (!c.req.header('Content-Type')?.startsWith('application/json')) return c.json({ error: '请使用 JSON 请求。' }, 415)
-    const length = Number(c.req.header('Content-Length') ?? 0)
-    if (length > 16_384) return c.json({ error: '请求内容过大。' }, 413)
-    const body = await c.req.text()
-    if (new TextEncoder().encode(body).length > 16_384) return c.json({ error: '请求内容过大。' }, 413)
+    const upload = c.req.method === 'POST' && url.pathname === '/api/v1/icons'
+    const contentType = c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase()
+    if (upload) {
+      if (!iconContentTypes.some(type => type === contentType)) return c.json({ error: '不支持的图标格式。' }, 415)
+      if ((await c.req.arrayBuffer()).byteLength > maxIconBytes) return c.json({ error: '图标不能超过 256 KB。' }, 413)
+    } else {
+      if (contentType !== 'application/json') return c.json({ error: '请使用 JSON 请求。' }, 415)
+      if (new TextEncoder().encode(await c.req.text()).length > 16_384) return c.json({ error: '请求内容过大。' }, 413)
+    }
   }
   await next()
 })
@@ -34,6 +45,35 @@ app.use('/api/*', async (c, next) => {
 })
 app.use('/api/*', authentication)
 app.route('/api/v1/auth', authRoutes)
+app.route('/api/v1/icons', iconRoutes)
+
+async function uploadedIconExists(db: D1Database, url: string) {
+  return !url.startsWith('/api/v1/icons/') || Boolean(await db.prepare('SELECT id FROM uploaded_icons WHERE id=?')
+    .bind(url.split('/').at(-1)).first())
+}
+
+async function findApplication(db: D1Database, id: string): Promise<AppRecord | null> {
+  const now = Date.now()
+  const row = await db.prepare(`
+    SELECT a.*, d.id AS deployment_id, d.url, d.launched_on, d.retired_at, d.status, d.revision,
+      COALESCE((SELECT SUM(COALESCE(p.ended_at, ?) - p.started_at)
+        FROM lifecycle_periods p WHERE p.deployment_id = d.id), 0) AS active_ms
+    FROM applications a JOIN deployments d ON d.application_id = a.id WHERE a.id=? AND a.archived=0
+  `).bind(now, id).first<Record<string, unknown>>()
+  if (!row) return null
+  return {
+    id: row.id, deploymentId: row.deployment_id, name: row.name, description: row.description,
+    type: row.type, category: row.category, tags: JSON.parse(row.tags as string), icon: row.icon, iconUrl: row.icon_url,
+    color: row.color, size: row.size, favorite: Boolean(row.favorite), archived: Boolean(row.archived),
+    createdAt: row.created_at, url: row.url, launchedOn: row.launched_on, retiredAt: row.retired_at,
+    status: row.status, revision: row.revision, activeMs: row.active_ms,
+  } as AppRecord
+}
+
+app.get('/api/v1/applications/:id', async c => {
+  const item = await findApplication(c.env.DB, c.req.param('id'))
+  return item ? c.json({ item }) : c.json({ error: '应用不存在。' }, 404)
+})
 
 app.get('/api/v1/applications', async c => {
   const now = Date.now()
@@ -46,7 +86,7 @@ app.get('/api/v1/applications', async c => {
   `).bind(now).all<Record<string, unknown>>()
   const items = result.results.map(row => ({
     id: row.id, deploymentId: row.deployment_id, name: row.name, description: row.description,
-    type: row.type, category: row.category, tags: JSON.parse(row.tags as string), icon: row.icon,
+    type: row.type, category: row.category, tags: JSON.parse(row.tags as string), icon: row.icon, iconUrl: row.icon_url,
     color: row.color, size: row.size, favorite: Boolean(row.favorite), archived: Boolean(row.archived),
     createdAt: row.created_at, url: row.url, launchedOn: row.launched_on, retiredAt: row.retired_at,
     status: row.status, revision: row.revision, activeMs: row.active_ms,
@@ -56,6 +96,7 @@ app.get('/api/v1/applications', async c => {
 
 app.post('/api/v1/applications', async c => {
   const input = appInput.parse(await c.req.json())
+  if (!await uploadedIconExists(c.env.DB, input.iconUrl)) return c.json({ error: '上传图标不存在，请重新上传。' }, 400)
   const now = Date.now()
   const started = input.launchedOn ? utcDateStart(input.launchedOn) : null
   if (started !== null && started > now) return c.json({ error: '上线日期不能在未来。' }, 400)
@@ -81,16 +122,20 @@ app.post('/api/v1/applications', async c => {
   return c.json({ id }, 201)
 })
 
-app.put('/api/v1/applications/:id', async c => {
-  const input = updateInput.parse(await c.req.json())
-  const existing = await c.env.DB.prepare('SELECT id FROM deployments WHERE application_id = ?').bind(c.req.param('id')).first<{ id: string }>()
+app.on(['PUT', 'PATCH'], '/api/v1/applications/:id', async c => {
+  const body = await c.req.json()
+  const changes = c.req.method === 'PATCH' ? patchInput.parse(body) : updateInput.parse(body)
+  const existing = await findApplication(c.env.DB, c.req.param('id'))
   if (!existing) return c.json({ error: '应用不存在。' }, 404)
+  if (existing.revision !== changes.revision) return c.json({ error: '数据已变更，请刷新重试。' }, 409)
+  const input = updateInput.parse({ ...existing, ...changes })
+  if (!await uploadedIconExists(c.env.DB, input.iconUrl)) return c.json({ error: '上传图标不存在，请重新上传。' }, 400)
   await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE deployments SET url = ?, revision = ? WHERE id = ?').bind(input.url, input.revision + 1, existing.id),
-    c.env.DB.prepare('UPDATE applications SET name=?, description=?, type=?, category=?, tags=?, icon=?, color=?, size=?, favorite=? WHERE id=?')
-      .bind(input.name, input.description, input.type, input.category, JSON.stringify(input.tags), input.icon, input.color, input.size, Number(input.favorite), c.req.param('id')),
+    c.env.DB.prepare('UPDATE deployments SET url = ?, revision = ? WHERE id = ?').bind(input.url, input.revision + 1, existing.deploymentId),
+    c.env.DB.prepare('UPDATE applications SET name=?, description=?, type=?, category=?, tags=?, icon=?, icon_url=?, color=?, size=?, favorite=? WHERE id=?')
+      .bind(input.name, input.description, input.type, input.category, JSON.stringify(input.tags), input.icon, input.iconUrl, input.color, input.size, Number(input.favorite), c.req.param('id')),
   ])
-  return c.json({ ok: true })
+  return c.json({ ok: true, revision: input.revision + 1 })
 })
 
 app.post('/api/v1/applications/:id/archive', async c => {

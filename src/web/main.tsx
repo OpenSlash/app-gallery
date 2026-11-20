@@ -140,7 +140,7 @@ function App({ onLogout }: { onLogout?: () => Promise<void> }) {
           filtered.length ? <div className={`app-grid ${preferences.view}`} style={{ '--tile-size': `${preferences.scale}px` } as CSSProperties}>
             {filtered.map((app, index) => <article className={`app-tile size-${app.size}`} key={app.id} style={{ '--index': index } as CSSProperties}>
               <div className="tile-surface">
-                <a className="tile-main" aria-label={`访问 ${app.name}`} href={app.url} target="_blank" rel="noopener noreferrer"><AppIcon icon={app.icon} color={app.color} />
+                <a className="tile-main" aria-label={`访问 ${app.name}`} href={app.url} target="_blank" rel="noopener noreferrer"><AppIcon icon={app.icon} color={app.color} iconUrl={app.iconUrl} />
                   <div className="tile-content"><h2>{app.name}</h2><p>{app.description || typeLabels[app.type]}</p>
                     <span className={`status status-${app.status}`}><i />{statusLabels[app.status]}</span></div>
                 </a>
@@ -161,7 +161,7 @@ function App({ onLogout }: { onLogout?: () => Promise<void> }) {
     <footer className="page-footer"><span>少一点寻找，多一点专注。</span><span>APP GALLERY <span className="footer-divider">/</span> YOUR PERSONAL LAUNCHPAD</span></footer>
     <nav className="dock" aria-label="收藏应用">
       <button className={`dock-home ${filter === 'all' ? 'current' : ''}`} aria-label="全部应用" onClick={() => { setFilter('all'); setCategory(''); setQuery('') }}><GridIcon /></button><span className="dock-divider" />
-      {source.filter(app => app.favorite).slice(0, 7).map(app => <Tooltip key={app.id} label={app.name}><a className="dock-app" href={app.url} target="_blank" rel="noopener noreferrer" aria-label={`打开收藏 ${app.name}`}><AppIcon icon={app.icon} color={app.color} /></a></Tooltip>)}
+      {source.filter(app => app.favorite).slice(0, 7).map(app => <Tooltip key={app.id} label={app.name}><a className="dock-app" href={app.url} target="_blank" rel="noopener noreferrer" aria-label={`打开收藏 ${app.name}`}><AppIcon icon={app.icon} color={app.color} iconUrl={app.iconUrl} /></a></Tooltip>)}
       {!source.some(app => app.favorite) && <button className="dock-placeholder" onClick={() => setFilter('favorites')}><StarIcon /><span>常用应用，放在这里</span></button>}
       <span className="dock-divider" /><Tooltip label="添加应用"><button className="dock-add" aria-label="添加应用" onClick={() => setEditor('new')}><PlusIcon /></button></Tooltip>
     </nav>

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import worker from '../../src/worker/index'
@@ -12,15 +12,14 @@ let limit: Mock<RateLimit['limit']>
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:')
-  sqlite.exec(readFileSync(new URL('../../drizzle/0001_initial.sql', import.meta.url), 'utf8'))
-  sqlite.exec(readFileSync(new URL('../../drizzle/0002_auth_sessions.sql', import.meta.url), 'utf8'))
-  sqlite.exec(readFileSync(new URL('../../drizzle/0003_admin_credentials.sql', import.meta.url), 'utf8'))
-  sqlite.exec(readFileSync(new URL('../../drizzle/0004_api_tokens.sql', import.meta.url), 'utf8'))
+  for (const name of readdirSync(new URL('../../drizzle/', import.meta.url)).filter(name => name.endsWith('.sql')).sort()) {
+    sqlite.exec(readFileSync(new URL(`../../drizzle/${name}`, import.meta.url), 'utf8'))
+  }
   const DB = {
     prepare(sql: string) {
       let args: SQLInputValue[] = []
       return {
-        bind(...values: SQLInputValue[]) { args = values; return this },
+        bind(...values: SQLInputValue[]) { args = values.map(value => value instanceof ArrayBuffer ? new Uint8Array(value) : value); return this },
         async first() { return sqlite.prepare(sql).get(...args) ?? null },
         async all() { return { results: sqlite.prepare(sql).all(...args) } },
         async run() { return sqlite.prepare(sql).run(...args) },
@@ -302,7 +301,7 @@ describe('部署故障诊断', () => {
   })
 })
 
-describe('仅添加应用的 API Token', () => {
+describe('应用读写 API Token', () => {
   async function issue(cookie?: string, input: unknown = { name: 'test integration', expiresInDays: 30 }) {
     const session = cookie ?? await login()
     const response = await post('/auth/tokens', input, session)
@@ -338,7 +337,7 @@ describe('仅添加应用的 API Token', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     const body = await response.json() as { items: Record<string, unknown>[] }
     expect(body.items).toHaveLength(1)
-    expect(body.items[0]).toMatchObject({ id: item.id, scope: 'applications:create', invalidated: false })
+    expect(body.items[0]).toMatchObject({ id: item.id, scope: 'applications:write', invalidated: false })
     for (const field of ['token', 'token_hash', 'credential_tag']) expect(body.items[0]).not.toHaveProperty(field)
     expect(JSON.stringify(body)).not.toContain(token)
   })
@@ -351,7 +350,7 @@ describe('仅添加应用的 API Token', () => {
     expect(sqlite.prepare('SELECT actor FROM events').get()!.actor).toBe(`api-token:${item.id}`)
     expect(sqlite.prepare('SELECT last_used_at FROM api_tokens').get()!.last_used_at).toBeTypeOf('number')
   })
-  it('不允许 Token 读取、修改、归档、退出或管理 Token', async () => {
+  it('不允许 Token 读取目录、归档、修改生命周期、退出或管理 Token', async () => {
     const { token } = await issue()
     for (const [method, path] of [
       ['GET', '/applications'], ['GET', '/auth/tokens'], ['GET', '/auth/session'],
@@ -364,6 +363,74 @@ describe('仅添加应用的 API Token', () => {
       }, ...(method === 'GET' ? {} : { body: '{}' }) })
       expect(response.status, `${method} ${path}`).toBe(403)
     }
+  })
+  it('现有 Token 可读取单个应用及部分编辑，不覆盖未提供字段或生命周期', async () => {
+    const { token } = await issue()
+    const created = await add(token, {}, {
+      name: 'original', url: 'https://example.com', type: 'service', launchedOn: '2026-01-01',
+      description: 'keep description', category: 'API', tags: ['keep'], icon: 'cloud', color: 'blue', size: 'large', favorite: true,
+    })
+    const { id } = await created.json() as { id: string }
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const read = await request(`/applications/${id}`, { headers })
+    expect(read.status).toBe(200)
+    const { item } = await read.json() as { item: { revision: number } }
+    const updated = await request(`/applications/${id}`, { method: 'PATCH', headers,
+      body: JSON.stringify({ revision: item.revision, name: 'vm2api', url: 'http://example.com/console' }),
+    })
+    expect(updated.status).toBe(200)
+    expect(await updated.json()).toEqual({ ok: true, revision: 1 })
+    expect(sqlite.prepare('SELECT name, icon, description, tags, color, size, favorite FROM applications WHERE id=?').get(id))
+      .toMatchObject({ name: 'vm2api', icon: 'cloud', description: 'keep description', tags: '["keep"]', color: 'blue', size: 'large', favorite: 1 })
+    expect(sqlite.prepare('SELECT url, status, launched_on FROM deployments WHERE application_id=?').get(id))
+      .toMatchObject({ url: 'http://example.com/console', status: 'active', launched_on: '2026-01-01' })
+    expect((await request(`/applications/${id}`, { method: 'PATCH', headers, body: '{"revision":0,"name":"stale"}' })).status).toBe(409)
+    expect((await request(`/applications/${id}`, { method: 'PATCH', headers,
+      body: '{"revision":1,"launchedOn":"2026-01-01"}' })).status).toBe(400)
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM events').get()?.n).toBe(1)
+    for (const method of ['PUT', 'PATCH']) {
+      expect((await request(`/applications/${id}`, { method, headers: { ...headers, Origin: 'https://evil.example.com' },
+        body: '{"revision":1,"name":"cross-origin"}' })).status).toBe(403)
+    }
+    expect((await request(`/applications/${crypto.randomUUID()}`, { headers })).status).toBe(404)
+  })
+  it('Token 图标上传保存在 D1、去重并受保护读取，撤销后不能上传或编辑', async () => {
+    const session = await login()
+    const { token, item } = await issue(session)
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'image/svg+xml' }
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>'
+    const upload = () => request('/icons', { method: 'POST', headers, body: svg })
+    const response = await upload()
+    expect(response.status).toBe(201)
+    const { iconUrl } = await response.json() as { iconUrl: string }
+    expect(await (await upload()).json()).toMatchObject({ iconUrl })
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM uploaded_icons').get()?.n).toBe(1)
+    expect((await request(iconUrl.replace('/api/v1', ''))).status).toBe(401)
+    const image = await request(iconUrl.replace('/api/v1', ''), { headers: { Authorization: `Bearer ${token}` } })
+    expect(image.status).toBe(200)
+    expect(image.headers.get('Content-Type')).toBe('image/svg+xml')
+    expect(image.headers.get('Content-Security-Policy')).toContain("sandbox; default-src 'none'")
+    expect(image.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(await image.text()).toBe(svg)
+    const created = await add(token, {}, { name: 'uploaded', url: 'https://example.com', type: 'app', iconUrl })
+    expect(created.status).toBe(201)
+    const { id } = await created.json() as { id: string }
+    expect(sqlite.prepare('SELECT icon_url FROM applications WHERE id=?').get(id)?.icon_url).toBe(iconUrl)
+    await post(`/auth/tokens/${item.id}/revoke`, {}, session)
+    expect((await upload()).status).toBe(401)
+    expect((await request(`/applications/${id}`, { method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{"revision":0,"name":"revoked"}' })).status).toBe(401)
+  })
+  it('拒绝图标跨域上传、过大文件、伪造图片及不存在的引用', async () => {
+    const { token } = await issue()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'image/svg+xml' }
+    expect((await request('/icons', { method: 'POST', headers: { ...headers, Origin: 'https://evil.example.com' }, body: '<svg/>' })).status).toBe(403)
+    expect((await request('/icons', { method: 'POST', headers, body: 'x'.repeat(262145) })).status).toBe(413)
+    expect((await request('/icons', { method: 'POST', headers, body: '<svg><script/></svg>' })).status).toBe(400)
+    expect((await request('/icons', { method: 'POST', headers: { ...headers, 'Content-Type': 'text/html' }, body: '<svg/>' })).status).toBe(415)
+    expect((await add(token, {}, { name: 'missing icon', type: 'app', url: 'https://example.com',
+      iconUrl: `/api/v1/icons/${crypto.randomUUID()}` })).status).toBe(400)
   })
   it('无效 Token 不回退到 Cookie 或本地开发身份；无认证仍要求同源', async () => {
     const cookie = await login()

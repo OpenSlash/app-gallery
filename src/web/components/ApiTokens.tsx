@@ -63,7 +63,7 @@ export function ApiTokens({ onClose }: { onClose: () => void }) {
   }
 
   return <Dialog title="API Token" onClose={onClose} dismissible={!busy} className="tokens-dialog">
-    <p className="tokens-intro">让脚本添加应用，无需使用管理员密码。Token 仅有添加权限，不能读取目录或修改已有应用。</p>
+    <p className="tokens-intro">让脚本添加应用、读取单个应用、编辑资料和上传图标，无需使用管理员密码。不能读取目录、归档、修改生命周期或管理 Token。升级后现有 Token 也具备这些权限。</p>
     {secret ? <section className="token-secret" aria-label="新创建的 Token">
       <strong>仅显示这一次，请立即保存</strong>
       <p>关闭此窗口后无法再次查看。不要放入网址、前端代码或公开仓库。</p>
@@ -92,6 +92,7 @@ export function ApiTokens({ onClose }: { onClose: () => void }) {
           item.expiresAt <= Date.now() ? '已过期' : '有效'
         return <li key={item.id}>
           <div className="token-meta"><strong>{item.name}</strong><code>{item.prefix}…</code>
+            <span>应用新增 / 单个读取 / 编辑 / 图标上传</span>
             <span>{status} · 到期 {date(item.expiresAt)}</span>
             <span>{item.lastUsedAt ? `最近调用 ${date(item.lastUsedAt)}` : '尚未调用'}</span>
           </div>
@@ -106,8 +107,9 @@ export function ApiTokens({ onClose }: { onClose: () => void }) {
   -H 'Content-Type: application/json' \\
   --data '{"name":"My App","url":"https://example.com","type":"website","launchedOn":"2026-01-01"}'`}</code></pre>
       <p>成功返回 HTTP 201 和应用 id。仅支持 HTTPS（本地开发除外）；每次调用创建一条应用，不自动去重。</p>
+      <p>用 GET /api/v1/applications/:id 读取单个应用的 revision，再用 PATCH /api/v1/applications/:id 提交 revision 和要修改的字段。图标通过 POST /api/v1/icons 上传图片原始字节，将返回的 iconUrl 写入应用。</p>
     </details>
-    {revoking && <ConfirmDialog title="撤销 API Token？" description={`撤销“${revoking.name}”后，使用它的脚本将立即失去添加权限。此操作不可恢复。`}
+    {revoking && <ConfirmDialog title="撤销 API Token？" description={`撤销“${revoking.name}”后，使用它的脚本将立即失去应用读写及图标上传权限。此操作不可恢复。`}
       confirmLabel="确认撤销" busy={busy} error={revokeError} onCancel={() => setRevoking(null)} onConfirm={revoke} />}
   </Dialog>
 }

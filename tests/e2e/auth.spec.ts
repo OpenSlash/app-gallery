@@ -134,7 +134,7 @@ test('其他浏览器完成初始化时不能覆盖密码', async ({ page }) => 
   await expect(page.getByRole('alert')).toHaveText('管理员密码已设置，请直接登录。')
 })
 
-test('创建一次性 Token、通过 API 添加应用、隐藏明文并撤销', async ({ page, request }) => {
+test('创建 Token、上传图标和编辑应用、隐藏明文并撤销', async ({ page, request }) => {
   const name = `browser integration ${Date.now()}`
   await page.goto('/')
   await page.getByLabel('管理员密码').fill('test-only-password-for-browser')
@@ -150,10 +150,40 @@ test('创建一次性 Token、通过 API 添加应用、隐藏明文并撤销', 
   expect((await request.get('/api/v1/applications')).status()).toBe(401)
   const headers = { Authorization: `Bearer ${token}` }
   const created = await request.post('/api/v1/applications', { headers, data: {
-    name, type: 'service', url: 'https://example.com',
+    name, type: 'service', url: 'https://example.com', tags: ['preserve'], icon: 'cloud', color: 'blue', size: 'large', favorite: true,
   } })
   expect(created.status()).toBe(201)
   const { id } = await created.json()
+  const read = await request.get(`/api/v1/applications/${id}`, { headers })
+  expect(read.status()).toBe(200)
+  const { item } = await read.json()
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="#22c55e"/></svg>'
+  const upload = await request.post('/api/v1/icons', {
+    headers: { ...headers, 'Content-Type': 'image/svg+xml' }, data: svg,
+  })
+  expect(upload.status()).toBe(201)
+  const { iconUrl } = await upload.json()
+  const image = await request.get(iconUrl, { headers })
+  expect(image.status()).toBe(200)
+  expect(await image.text()).toBe(svg)
+  expect(image.headers()['content-security-policy']).toContain('sandbox')
+  const updated = await request.patch(`/api/v1/applications/${id}`, {
+    headers, data: { revision: item.revision, url: 'http://example.com/console', iconUrl },
+  })
+  expect(updated.status()).toBe(200)
+  const { item: current } = await (await request.get(`/api/v1/applications/${id}`, { headers })).json()
+  expect(current).toMatchObject({
+    url: 'http://example.com/console', iconUrl, name, revision: 1,
+    tags: ['preserve'], icon: 'cloud', color: 'blue', size: 'large', favorite: true,
+  })
+  expect((await request.patch(`/api/v1/applications/${id}`, {
+    headers, data: { revision: 0, name: 'stale' },
+  })).status()).toBe(409)
+  const writes = await Promise.all(['A', 'B'].map(description => request.patch(`/api/v1/applications/${id}`, {
+    headers, data: { revision: 1, description },
+  })))
+  expect(writes.map(response => response.status()).sort()).toEqual([200, 409])
+  expect((await request.post(`/api/v1/applications/${id}/archive`, { headers, data: { revision: 2 } })).status()).toBe(403)
   const adminList = await (await page.request.get('/api/v1/applications')).json()
   expect(adminList.items.some((item: { id: string }) => item.id === id)).toBe(true)
   expect((await request.get('/api/v1/applications', { headers })).status()).toBe(403)
@@ -177,8 +207,13 @@ test('创建一次性 Token、通过 API 添加应用、隐藏明文并撤销', 
   expect((await request.post('/api/v1/applications', { headers, data: {
     name: 'must not persist', type: 'service', url: 'https://example.com',
   } })).status()).toBe(401)
+  expect((await request.patch(`/api/v1/applications/${id}`, { headers, data: { revision: 2, name: 'revoked' } })).status()).toBe(401)
+  expect((await request.post('/api/v1/icons', {
+    headers: { ...headers, 'Content-Type': 'image/svg+xml' }, data: svg,
+  })).status()).toBe(401)
+  expect((await request.get(iconUrl)).status()).toBe(401)
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   expect((await page.request.post(`/api/v1/applications/${id}/archive`, {
-    headers: { Origin: 'http://127.0.0.1:4179' }, data: { revision: 0 },
+    headers: { Origin: 'http://127.0.0.1:4179' }, data: { revision: 2 },
   })).status()).toBe(200)
 })

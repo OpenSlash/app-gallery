@@ -236,16 +236,70 @@ curl --fail-with-body 'https://your-worker.workers.dev/api/v1/applications' \
 A successful response is HTTP 201 with `{ "id": "..." }`. Required fields are
 `name`, `url` (HTTP or HTTPS, without embedded credentials), and `type`
 (`website`, `service`, or `app`). Optional fields include `description`, `category`,
-`tags`, `icon`, `color`, `size`, `favorite`, and `launchedOn` (UTC `YYYY-MM-DD`,
+`tags`, `icon`, `iconUrl`, `color`, `size`, `favorite`, and `launchedOn` (UTC `YYYY-MM-DD`,
 not in the future; omitted or null means not yet launched).
 Each request creates a new application; there is no automatic deduplication.
 
-Tokens can **only** call `POST /api/v1/applications`; they cannot list applications,
-edit/archive them, change lifecycle records, or access authentication/token
-management. HTTPS is required except on loopback for development. Script requests
+### Uploaded Icons
+
+Upload an icon in the application editor and save the application. PNG, JPEG,
+WebP, ICO, and static SVG are accepted, up to 256 KiB. Image bytes are persisted
+in D1, deduplicated by content hash, and served from an authenticated
+`/api/v1/icons/:id` URL. No application-specific images are bundled in the
+repository and no R2 setup is required. Uploads are independent assets;
+cancelling an edit does not delete an already uploaded image.
+
+Icons appear in the launchpad, cards, details, editor preview, and Dock. Failed
+images fall back to the chosen Radix icon. Choosing a Radix icon clears `iconUrl`.
+External HTTPS image URLs without embedded credentials remain optional; their
+requests omit the referrer, but remote hosts still receive the visitor's IP.
+Download icons from HTTP services and upload them instead of embedding mixed
+content. The server does not fetch arbitrary URLs. SVG responses are sandboxed
+with a restrictive CSP; scripted SVG and external references are rejected.
+
+Use `pnpm run deploy` to migrate icon metadata and uploaded image storage before
+publishing. Existing applications are not automatically changed.
+
+### API Token Permissions
+
+Tokens have the `applications:write` scope. **Existing tokens also gain these
+permissions after upgrading**; revoke any that should remain create-only before
+deploying. Supported endpoints:
+
+- `POST /api/v1/applications`: create an application.
+- `GET /api/v1/applications/:id`: read one known application, including its revision.
+- `PUT /api/v1/applications/:id`: replace editable metadata, with `revision`.
+- `PATCH /api/v1/applications/:id`: update only supplied fields, with `revision`.
+- `POST /api/v1/icons`: upload raw image bytes with the image's Content-Type.
+- `GET /api/v1/icons/:id`: read an uploaded image.
+
+Tokens cannot list the application directory, archive applications, change
+lifecycle records, or access authentication/token management.
+HTTPS is required except on loopback for development. Script requests
 do not need a Cookie or Origin header. Cross-origin browser calls remain blocked;
 there is no permissive CORS. A supplied invalid Authorization header never falls
 back to an existing browser session.
+
+To upload an icon, then edit an existing application (replace `APP_ID` and use
+the actual `iconUrl` returned by the upload):
+
+```sh
+curl --fail-with-body 'https://your-worker.workers.dev/api/v1/icons' \
+  -H "Authorization: Bearer $APP_GALLERY_TOKEN" \
+  -H 'Content-Type: image/png' --data-binary @icon.png
+
+curl --fail-with-body 'https://your-worker.workers.dev/api/v1/applications/APP_ID' \
+  -H "Authorization: Bearer $APP_GALLERY_TOKEN"
+
+curl --fail-with-body -X PATCH 'https://your-worker.workers.dev/api/v1/applications/APP_ID' \
+  -H "Authorization: Bearer $APP_GALLERY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"revision":0,"name":"My App","iconUrl":"/api/v1/icons/RETURNED_ICON_ID"}'
+```
+
+Use the revision from the single-application GET, not an assumed value. A stale
+revision returns HTTP 409 without changing the application. PATCH cannot modify
+launch dates or lifecycle fields, and omitted metadata is preserved.
 
 The management UI shows up to 100 tokens, with unexpired non-revoked tokens first
 and recent history next, expiry, and last authenticated

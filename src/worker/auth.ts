@@ -56,8 +56,11 @@ async function validCredentialTag(key: string, value: string, tag: string) {
     crypto.subtle.verify('HMAC', await passwordKey(key), bytes(tag), encoder.encode(value))
 }
 
-export const isTokenCreateRequest = (method: string, path: string) =>
-  method === 'POST' && path === '/api/v1/applications'
+export function isTokenRequest(method: string, path: string) {
+  if (method === 'POST' && ['/api/v1/applications', '/api/v1/icons'].includes(path)) return true
+  const resource = path.match(/^\/api\/v1\/(applications|icons)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i)?.[1]
+  return resource === 'applications' ? ['GET', 'PUT', 'PATCH'].includes(method) : resource === 'icons' && method === 'GET'
+}
 
 async function passwordMatches(expected: string, provided: string) {
   // Compare fixed-size MACs through Web Crypto instead of comparing secret strings.
@@ -118,7 +121,7 @@ export const authentication = createMiddleware<AuthEnv>(async (c, next) => {
   const authorization = c.req.header('Authorization')
   // A supplied credential is authoritative; never fall back to cookies or local bypass.
   if (authorization !== undefined) {
-    if (!isTokenCreateRequest(c.req.method, path)) return c.json({ error: 'API Token 仅允许添加应用。' }, 403)
+    if (!isTokenRequest(c.req.method, path)) return c.json({ error: 'API Token 仅允许添加、读取单个应用、编辑资料及上传或读取图标。' }, 403)
     if (url.protocol !== 'https:' && !localHost(url)) return c.json({ error: 'API Token 必须使用 HTTPS。' }, 400)
     const token = authorization.replace(/^Bearer /i, '')
     if (!/^Bearer /i.test(authorization) || !/^ag_[a-f0-9]{64}$/.test(token)) {
@@ -239,7 +242,7 @@ authRoutes.get('/tokens', async c => {
     LIMIT 100
   `).bind(Date.now()).all<StoredApiToken>()
   const items: ApiTokenSummary[] = await Promise.all(rows.results.map(async row => ({
-    id: row.id, name: row.name, prefix: row.token_prefix, scope: 'applications:create' as const,
+    id: row.id, name: row.name, prefix: row.token_prefix, scope: 'applications:write' as const,
     createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at, revokedAt: row.revoked_at,
     invalidated: !await validCredentialTag(current.sessionKey, `api-token:${row.id}`, row.credential_tag),
   })))
@@ -266,7 +269,7 @@ authRoutes.post('/tokens', async c => {
   `).bind(id, input.name, await digest(token), token.slice(0, 11), tag, now, expiresAt, now).first<{ id: string }>()
   if (!inserted) return c.json({ error: '最多保留 20 个未过期且未撤销的 Token，请先撤销旧 Token。' }, 409)
   return c.json({ token, item: {
-    id, name: input.name, prefix: token.slice(0, 11), scope: 'applications:create',
+    id, name: input.name, prefix: token.slice(0, 11), scope: 'applications:write',
     createdAt: now, expiresAt, lastUsedAt: null, revokedAt: null, invalidated: false,
   } satisfies ApiTokenSummary }, 201)
 })

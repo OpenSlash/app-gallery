@@ -14,3 +14,15 @@ export async function api<T>(path: string, body?: unknown, method = 'POST'): Pro
   }
   return result
 }
+
+export async function uploadIcon(file: File): Promise<{ id: string; iconUrl: string }> {
+  const response = await fetch('/api/v1/icons', {
+    method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file,
+  })
+  const result = await response.json() as { id: string; iconUrl: string; error?: string }
+  if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('gallery-session-expired'))
+    throw new Error(result.error || '图标上传失败')
+  }
+  return result
+}

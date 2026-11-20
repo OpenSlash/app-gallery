@@ -8,6 +8,7 @@ export const applications = sqliteTable('applications', {
   category: text('category').notNull(),
   tags: text('tags', { mode: 'json' }).$type<string[]>().notNull(),
   icon: text('icon').notNull(),
+  iconUrl: text('icon_url').notNull().default(''),
   color: text('color').notNull(),
   size: text('size').notNull(),
   favorite: integer('favorite', { mode: 'boolean' }).notNull(),
