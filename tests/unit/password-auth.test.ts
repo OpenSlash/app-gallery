@@ -13,6 +13,7 @@ let limit: Mock<RateLimit['limit']>
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:')
   sqlite.exec(readFileSync(new URL('../../drizzle/0002_auth_sessions.sql', import.meta.url), 'utf8'))
+  sqlite.exec(readFileSync(new URL('../../drizzle/0003_admin_credentials.sql', import.meta.url), 'utf8'))
   const DB = {
     prepare(sql: string) {
       let args: SQLInputValue[] = []
@@ -56,20 +57,21 @@ describe('管理员密码和会话', () => {
       expect(response.status).toBe(503)
       expect(response.headers.get('Cache-Control')).toBe('no-store')
       const status = await request('/auth/session', {}, bindings)
-      expect(await status.json()).toEqual({ configured: false, authenticated: false, localDev: false, configurationIssue })
+      expect(await status.json()).toEqual({ configured: false, authenticated: false, localDev: false,
+        configurationIssue, setupRequired: configurationIssue === 'missing' })
     }
   })
   it('未登录或伪造旧 Access 头无法读取 API', async () => {
     const response = await request('/applications', { headers: { 'Cf-Access-Jwt-Assertion': 'fake' } })
     expect(response.status).toBe(401)
-    expect(await (await request('/auth/session')).json()).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null })
+    expect(await (await request('/auth/session')).json()).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null, setupRequired: false })
   })
   it('恰好 16 位的密码能配置并登录，诊断不暴露密码或具体长度', async () => {
     env.ADMIN_PASSWORD = 'exactly16letters'
     expect(env.ADMIN_PASSWORD).toHaveLength(16)
     const response = await request('/auth/session')
     const status = await response.json() as Record<string, unknown>
-    expect(status).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null })
+    expect(status).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null, setupRequired: false })
     expect(JSON.stringify(status)).not.toContain(env.ADMIN_PASSWORD)
     expect((await post('/auth/login', { password: env.ADMIN_PASSWORD })).status).toBe(200)
   })
@@ -126,7 +128,7 @@ describe('管理员密码和会话', () => {
     expect((await request('/missing', { headers: { Cookie: old } })).status).toBe(401)
   })
   it('登录和退出拒绝跨域、缺少 Origin 或非 JSON 请求', async () => {
-    for (const path of ['/auth/login', '/auth/logout']) {
+    for (const path of ['/auth/setup', '/auth/login', '/auth/logout']) {
       for (const Origin of [undefined, 'https://evil.example.com']) {
         expect((await request(path, { method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(Origin ? { Origin } : {}) }, body: '{}' })).status).toBe(403)
@@ -144,11 +146,11 @@ describe('管理员密码和会话', () => {
   })
   it('生产域名不能使用开发开关绕过登录', async () => {
     expect((await request('/applications', {}, { ...env, LOCAL_DEV: 'true' })).status).toBe(401)
-    expect((await request('/applications', {}, { LOCAL_DEV: 'true' })).status).toBe(503)
+    expect((await request('/applications', {}, { ...env, ADMIN_PASSWORD: undefined, LOCAL_DEV: 'true' })).status).toBe(503)
   })
   it('本地开发可绕过认证，但仍拒绝跨域写入', async () => {
     const status = await worker.request('http://localhost/api/v1/auth/session', {}, { LOCAL_DEV: 'true' })
-    expect(await status.json()).toEqual({ configured: true, authenticated: true, localDev: true, configurationIssue: null })
+    expect(await status.json()).toEqual({ configured: true, authenticated: true, localDev: true, configurationIssue: null, setupRequired: false })
     expect((await worker.request('http://localhost/api/v1/missing', {}, { LOCAL_DEV: 'true' })).status).toBe(404)
     const cross = await worker.request('http://127.0.0.1/api/v1/applications', {
       method: 'POST', headers: { Origin: 'https://evil.example.com', 'Content-Type': 'application/json' }, body: '{}',
@@ -164,5 +166,90 @@ describe('管理员密码和会话', () => {
     const cookie = response.headers.get('Set-Cookie')!
     expect(cookie).toMatch(/^gallery-session=/)
     expect(cookie).not.toContain('Secure')
+  })
+})
+
+describe('首次部署设置密码', () => {
+  beforeEach(() => { env.ADMIN_PASSWORD = undefined })
+  const setup = (value = password, confirmPassword = value) =>
+    post('/auth/setup', { password: value, confirmPassword })
+
+  it('首次设置存储独立盐和哈希，不存明文；重启后仍可登录', async () => {
+    expect((await (await request('/auth/session')).json() as { setupRequired: boolean }).setupRequired).toBe(true)
+    expect((await request('/applications')).status).toBe(503)
+    expect((await setup()).status).toBe(201)
+    const stored = sqlite.prepare('SELECT * FROM admin_credentials').get()!
+    expect(stored.password_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(stored.salt).toMatch(/^[a-f0-9]{32}$/)
+    expect(JSON.stringify(stored)).not.toContain(password)
+    expect(stored.iterations).toBe(100_000)
+    env = { ...env }
+    const status = await (await request('/auth/session')).json()
+    expect(status).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null, setupRequired: false })
+    const cookie = await login()
+    expect((await request('/missing', { headers: { Cookie: cookie } })).status).toBe(404)
+    expect((await post('/auth/login', { password: 'wrong' })).status).toBe(401)
+    expect((await post('/auth/logout', {}, cookie)).status).toBe(200)
+    expect((await request('/missing', { headers: { Cookie: cookie } })).status).toBe(401)
+  })
+  it('拒绝不合法的密码、确认密码和超大请求', async () => {
+    for (const value of [undefined, 123, null, 'short', ' '.repeat(16), 'x'.repeat(257)]) {
+      expect((await post('/auth/setup', { password: value, confirmPassword: value })).status).toBe(400)
+    }
+    expect((await setup(password, 'different-password')).status).toBe(400)
+    expect((await post('/auth/setup', null)).status).toBe(400)
+    expect((await setup('x'.repeat(17000))).status).toBe(413)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM admin_credentials').get()!.count).toBe(0)
+  })
+  it('重复初始化和并发初始化不能覆盖现有密码', async () => {
+    const responses = await Promise.all([setup(), setup('another-valid-test-password')])
+    expect(responses.map(response => response.status).sort()).toEqual([201, 409])
+    const winner = responses[0].status === 201 ? password : 'another-valid-test-password'
+    const stored = sqlite.prepare('SELECT * FROM admin_credentials').get()!
+    expect((await setup('replacement-test-password')).status).toBe(409)
+    expect(sqlite.prepare('SELECT * FROM admin_credentials').get()).toEqual(stored)
+    expect((await post('/auth/login', { password: winner })).status).toBe(200)
+    expect((await post('/auth/login', { password: 'replacement-test-password' })).status).toBe(401)
+  })
+  it('设置恰好 16 位的密码；相同密码重新初始化会使用不同盐', async () => {
+    expect((await setup('exactly16letters')).status).toBe(201)
+    const first = sqlite.prepare('SELECT * FROM admin_credentials').get()!
+    expect((await post('/auth/login', { password: 'exactly16letters' })).status).toBe(200)
+    sqlite.exec('DELETE FROM admin_credentials')
+    expect((await setup('exactly16letters')).status).toBe(201)
+    const second = sqlite.prepare('SELECT * FROM admin_credentials').get()!
+    expect(first.salt).not.toBe(second.salt)
+    expect(first.password_hash).not.toBe(second.password_hash)
+  })
+  it('初始化同样受限流和 HTTPS 约束', async () => {
+    limit.mockResolvedValue({ success: false })
+    expect((await setup()).status).toBe(429)
+    env.LOGIN_RATE_LIMITER = undefined
+    expect((await setup()).status).toBe(503)
+    const response = await worker.request('http://gallery.example.com/api/v1/auth/setup', {
+      method: 'POST', headers: { Origin: 'http://gallery.example.com', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, confirmPassword: password }),
+    }, env)
+    expect(response.status).toBe(400)
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM admin_credentials').get()!.count).toBe(0)
+  })
+  it('D1 密码优先于旧 Secret；已有有效 Secret 时不开放初始化', async () => {
+    env.ADMIN_PASSWORD = password
+    expect((await setup()).status).toBe(409)
+    env.ADMIN_PASSWORD = undefined
+    await setup()
+    const cookie = await login()
+    env.ADMIN_PASSWORD = 'a-different-legacy-password'
+    expect((await request('/missing', { headers: { Cookie: cookie } })).status).toBe(404)
+    expect((await post('/auth/login', { password: env.ADMIN_PASSWORD })).status).toBe(401)
+  })
+  it('通过数据库重新初始化密码后，旧会话失效，即使新旧密码相同', async () => {
+    await setup()
+    const old = await login()
+    sqlite.exec('DELETE FROM admin_credentials')
+    await setup()
+    expect((await request('/missing', { headers: { Cookie: old } })).status).toBe(401)
+    const current = await login()
+    expect((await request('/missing', { headers: { Cookie: current } })).status).toBe(404)
   })
 })

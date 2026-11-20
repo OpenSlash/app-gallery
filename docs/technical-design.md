@@ -36,7 +36,7 @@ API 现阶段一次返回私有小型目录，搜索与分页扩展留待后续�
 | 请求校验 | Zod | 校验 API 输入和导入文件 |
 | 数据访问 | Drizzle ORM，D1 适配器 | 表结构、类型和 SQL 迁移管理 |
 | 数据库 | Cloudflare D1 | 通过 Worker binding 访问，不使用本地持久文件 |
-| 身份保护 | 内置管理员密码登录 | Worker Secret、D1 会话、HttpOnly Cookie，不依赖 Zero Trust |
+| 身份保护 | 内置管理员密码登录 | 首次页面设置、D1 密码哈希与会话、HttpOnly Cookie，不依赖 Zero Trust |
 | 发布工具 | Wrangler + Cloudflare Vite plugin | 本地开发、预览和生产发布 |
 | 测试 | Vitest + Workers 测试环境、Playwright | 业务规则、D1 集成和页面流程 |
 | 包管理 | pnpm | 锁定依赖，具体版本在初始化时确定 |
@@ -218,11 +218,15 @@ wrangler.jsonc
 
 ## 7. 安全与环境隔离
 
-- 使用单管理员密码登录，`ADMIN_PASSWORD` 以 Worker Secret 保存，长度为 16 至 256 位。
+- 使用单管理员密码登录，首次部署后在页面设置 16 至 256 位密码。
+- D1 单例凭据行保存 PBKDF2-SHA-256 哈希（100,000 次迭代）、随机盐和独立会话密钥，
+  不保存明文。原子插入防止重复或并发设置覆盖密码。
+- 首次初始化不验证 Cloudflare 账号归属，部署后应立即设置，敏感实例需临时限制访问。
+- 兼容旧 `ADMIN_PASSWORD` Secret；已有 D1 凭据优先，无 D1 凭据且 Secret 有效时关闭初始化。
 - API 验证服务器端会话；HTTPS Cookie 使用 HttpOnly、Secure、SameSite=Strict，
   会话有效期为 12 小时，D1 仅保存令牌哈希和绑定当前密码的校验值。
 - 退出撤销当前会话，修改密码使旧密码签发的会话失效；没有公开注册或网页重置入口。
-- 登录使用 Workers 限流绑定，按 IP 和节点约每分钟 5 次；不是全局严格配额。
+- 登录和首次设置共用 Workers 限流绑定，按 IP 和节点约每分钟 5 次；不是全局严格配额。
 - 保留 `workers.dev` 访问入口，数据 API 独立认证；默认关闭动态预览 URL。
 - 本地身份模拟只允许在明确的本地配置启用，生产环境缺失认证配置时拒绝访问。
 - 写接口校验 Origin，要求 JSON Content-Type，不启用宽泛 CORS。
@@ -233,14 +237,16 @@ wrangler.jsonc
 
 本地、预览和生产应使用不同 D1 数据库及管理员密码。
 数据库 binding 固定为 `DB`；`APP_TIMEZONE` 为环境配置，
-`ADMIN_PASSWORD` 仅存储为 Secret，部署凭据只放在 CI 或本地凭据存储。
+管理员密码凭据保存在各环境 D1，旧 `ADMIN_PASSWORD` 仅存储为 Secret；
+部署凭据只放在 CI 或本地凭据存储。忘记密码需由账号所有者限制站点访问后，
+通过 D1 控制台清除凭据及会话、移除旧 Secret，再立即重新初始化。
 
 ## 8. 部署、迁移与恢复
 
 部署顺序：
 
 1. 使用部署按钮创建 Worker 和 D1；不再需要预先创建 Access 应用。
-2. 设置 `ADMIN_PASSWORD` Secret 和登录限流绑定；密码未配置时锁定数据 API。
+2. 保留登录限流绑定，部署后立即在页面创建管理员密码；初始化前锁定数据 API。
 3. 在预览环境执行迁移、集成测试和权限验证。
 4. 生产迁移前创建可恢复备份，迁移完成后发布应用。
 5. 验证登录、未授权拒绝、应用查询和生命周期写入。

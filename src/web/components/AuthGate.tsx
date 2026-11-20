@@ -3,13 +3,15 @@ import { api } from '../api'
 import { GridIcon } from '../icons'
 import type { PasswordConfigurationIssue } from '../../shared/auth'
 
-type Session = { configured: boolean; authenticated: boolean; localDev: boolean; configurationIssue?: PasswordConfigurationIssue }
+type Session = { configured: boolean; authenticated: boolean; localDev: boolean; configurationIssue?: PasswordConfigurationIssue; setupRequired?: boolean }
 
 export function AuthGate({ children }: {
   children: (session: Session, logout: () => Promise<void>) => ReactNode
 }) {
   const [session, setSession] = useState<Session | null>(null)
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const issue = session?.configurationIssue
@@ -58,10 +60,34 @@ export function AuthGate({ children }: {
     } catch (error) { setError((error as Error).message) }
     finally { setBusy(false) }
   }
+  async function setup(event: FormEvent) {
+    event.preventDefault()
+    setError(''); setNotice('')
+    if (password.trim().length < 16 || password.length > 256) {
+      setError('请使用 16 至 256 位的密码，去除首尾空白后至少 16 位。')
+      return
+    }
+    if (password !== confirmPassword) {
+      setError('两次输入的密码不一致。')
+      return
+    }
+    setBusy(true)
+    try {
+      await api('/auth/setup', { password, confirmPassword })
+      setPassword(''); setConfirmPassword('')
+      await check()
+      setNotice('密码已设置，请登录。')
+    } catch (error) {
+      const message = (error as Error).message
+      // Another browser may have completed initialization while this form was open.
+      await check().catch(() => {})
+      setError(message)
+    } finally { setBusy(false) }
+  }
   async function logout() {
     await api('/auth/logout', {})
     setSession(previous => previous ? { ...previous, authenticated: false } : null)
-    setPassword(''); setError('')
+    setPassword(''); setConfirmPassword(''); setError(''); setNotice('')
   }
 
   if (session?.authenticated) return children(session, logout)
@@ -77,11 +103,25 @@ export function AuthGate({ children }: {
           {error ? <p className="auth-error" role="alert">{error}</p> : <div className="auth-skeleton skeleton" />}
           {error && <button className="button secondary" onClick={() => check().catch(error => setError(error.message))}>重新连接</button>}
         </> : session.configured ? <form onSubmit={login}>
+          {notice && <p role="status">{notice}</p>}
           <label htmlFor="admin-password">管理员密码</label>
           <input id="admin-password" name="password" type="password" autoComplete="current-password" required
             maxLength={256} value={password} onChange={event => setPassword(event.target.value)} disabled={busy} />
           {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="button primary" type="submit" disabled={busy || !password}>{busy ? '正在登录…' : '进入应用空间'}</button>
+        </form> : session.setupRequired ? <form onSubmit={setup}>
+          <p>首次使用，请创建管理员密码。密码加盐哈希后保存在 D1，无需配置 Cloudflare Secret。</p>
+          <p>初始化完成前，任何能访问本站的人都可设置密码，请立即完成。</p>
+          <label htmlFor="setup-password">管理员密码</label>
+          <input id="setup-password" name="password" type="password" autoComplete="new-password" required
+            minLength={16} maxLength={256} value={password} onChange={event => setPassword(event.target.value)} disabled={busy} />
+          <label htmlFor="confirm-password">确认密码</label>
+          <input id="confirm-password" name="confirmPassword" type="password" autoComplete="new-password" required
+            minLength={16} maxLength={256} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} disabled={busy} />
+          {error && <p className="auth-error" role="alert">{error}</p>}
+          <button className="button primary" type="submit" disabled={busy || !password || !confirmPassword}>
+            {busy ? '正在保存…' : '设置密码'}
+          </button>
         </form> : <>
           <p role="status">{issue === 'too_short' ? 'Worker 已读取到密码，但去除首尾空白后不足 16 位。' :
             issue === 'too_long' ? 'Worker 已读取到密码，但长度超过 256 位。' :

@@ -48,8 +48,8 @@ pnpm dev
 打开终端输出的本地地址。开发身份仅在 localhost / 127.0.0.1 生效。
 不要将 `LOCAL_DEV=true` 添加到生产配置。
 示例预览不写入数据库，新安装实例不会预置示例应用。
-需要测试真实登录时，不设置 `LOCAL_DEV`，改为在 `.dev.vars` 中设置
-16 至 256 位的独立 `ADMIN_PASSWORD`。
+需要测试真实登录时，不设置 `LOCAL_DEV`，首次打开页面时设置管理员密码。
+密码凭据保存在本地 D1，重启开发服务器不会丢失。
 
 需要可以编辑、收藏和查看历史的持久化模拟数据时，执行：
 
@@ -98,26 +98,23 @@ Cloudflare 模板流程也可能提前创建数据库；已有真实 ID 时会�
 
 **不再需要开通或配置 Cloudflare Zero Trust / Access。**
 
-1. 在部署页面的 `ADMIN_PASSWORD` 中设置 16 至 256 位的独立长密码，
-   建议使用密码管理器生成。该字段由 `.dev.vars.example` 声明，
-   Cloudflare 将其作为 Worker Secret，而不是公开配置变量。
-   如果 Cloudflare 将其提供为构建 Secret，`pnpm deploy` 会在发布时显式上传为
-   运行时 Worker Secret，不写入源码配置或前端产物。
-2. 完成部署，打开 Worker 地址，用该密码登录。
+1. 完成部署，无需在部署表单或 Worker 设置中配置管理员密码或 Secret。
+2. 立即打开 Worker 地址，在首次设置页面输入并确认 16 至 256 位的独立长密码，
+   建议使用密码管理器生成；保存后使用该密码登录。
 3. 确认未登录请求 `/api/v1/applications` 返回 401，再录入真实资料。
 
-未设置密码或密码过短时，页面显示配置指引，数据 API 返回 503。
-可在 Worker 的设置 > 变量和机密中，添加类型为 **Secret** 的
-`ADMIN_PASSWORD`，保存并部署。不要将真实密码放入 `wrangler.jsonc`、
-源代码或 `VITE_*` 变量。
-如果直接在 Worker 设置中管理密码，请留空构建环境的 `ADMIN_PASSWORD`。
-两处都配置时，每次部署都会上传构建环境中的值，覆盖运行时的旧值。
+**首次初始化的归属风险：**设置完成前，任何能够访问本站的人都可以抢先创建
+管理员密码。请勿提前分享网址，敏感部署建议在初始化期间临时限制访问。
+首次设置页面不验证访问者是否为 Cloudflare 账号所有者。
+
+D1 只存 PBKDF2-SHA-256 密码哈希（100,000 次迭代）、每个密码独立的随机盐、
+以及独立的会话签名密钥，不存明文密码。数据库单例主键保证并发或重复初始化
+不能覆盖已有密码。初始化完成前，数据接口返回 503。请妥善备份和保护 D1。
 
 会话有效期 12 小时，HTTPS 下使用仅限当前主机的 HttpOnly、Secure、
 SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值；
-退出会撤销服务端会话，修改密码会使旧密码签发的会话失效。
-没有公开注册或网页找回密码入口，忘记密码时修改 Worker Secret 即可。
-内置登录限流按 IP 和 Cloudflare 节点限制每分钟 5 次，不是全局严格配额。
+退出会撤销服务端会话。初始化后不再开放注册，也没有网页找回密码入口。
+设置与登录共用按 IP 和 Cloudflare 节点每分钟 5 次的限流，不是全局严格配额。
 页面外壳不包含业务数据，动态预览 URL 默认关闭。
 
 ### 命令行部署
@@ -127,14 +124,13 @@ SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值�
 ```sh
 pnpm exec wrangler login
 pnpm deploy
-pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 生产账号资源和真实云端发布尚未在本仓库执行。
 如需其他数据库名称，在首次部署前修改 `wrangler.jsonc` 中的 `database_name`；
 如需使用指定数据库，直接填入其真实 `database_id`。命令行部署会将解析到的
 真实 ID 写入配置，建议在自己的部署仓库中保留该 ID。
-最后一条命令会安全提示输入管理员密码；设置完成前数据接口保持锁定。
+部署后打开网址设置管理员密码；设置完成前数据接口保持锁定。
 
 ### D1 错误 10181 恢复
 
@@ -149,28 +145,41 @@ pnpm exec wrangler secret put ADMIN_PASSWORD
 ### 旧版本升级
 
 将更新拉取到你的部署仓库，执行 `pnpm build` 和 `pnpm deploy`，
-后者会应用新增的会话表迁移，再设置 `ADMIN_PASSWORD` Secret。
+后者会应用新增的会话及凭据表迁移，再打开页面设置密码。
 确认密码登录正常后，可移除旧 Access 应用或 Worker 保护，避免额外登录。
 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 不再使用，已有应用及历史数据保留。
 
-### 已设置密码仍显示设置页面
+### 已有 Secret 登录的实例
 
-打开同一生产域名下的 `/api/v1/auth/session`，查看 `configurationIssue`：
-`missing` 表示当前运行的 Worker 没有收到变量，`too_short` 表示过短，
-`too_long` 表示过长。合法密码（包括恰好 16 位）会返回
-`configured: true` 和 `configurationIssue: null`，不会返回密码或具体长度。
+没有 D1 密码时，有效的运行时 `ADMIN_PASSWORD` 仍可登录，此时不开放首次初始化。
+如需改用页面设置，删除运行时和构建环境中的旧 `ADMIN_PASSWORD`，部署后立即在页面
+创建密码，已有应用和历史记录不会删除。无效的旧 Secret 需先删除或修正。
+D1 密码一旦创建，优先级高于旧 Secret，遗留 Secret 不会覆盖它。
+部署脚本仍兼容显式提供的构建 `ADMIN_PASSWORD`，使用页面设置时请留空。
 
-若为 `missing`，检查变量是否配置在当前网址对应的 Worker 和生产环境，
-而不是只配置在构建设置中；添加运行时 Secret 后需点击部署。
-也可以更新部署脚本，设置构建 Secret，然后以 `pnpm deploy` 重新构建部署。
-构建变量不会天然成为运行时绑定，新脚本会显式上传。
-设置页面会在切回标签页时和可见状态下每 15 秒重新检测，也可手动点击检查。
+`GET /api/v1/auth/session` 返回 `setupRequired: true` 表示可以首次初始化，
+不会返回密码凭据。设置页面会在切回标签页时和可见状态下每 15 秒重新检测。
+
+### 忘记密码
+
+没有匿名重置接口。Cloudflare 账号所有者可先临时限制站点访问，
+在绑定的 D1 控制台执行：
+
+```sql
+DELETE FROM admin_credentials;
+DELETE FROM auth_sessions;
+```
+
+移除遗留的运行时和构建 `ADMIN_PASSWORD`，立即在页面创建新密码，再恢复访问。
+此操作保留所有应用及生命周期记录；重置窗口中任何访问者都可能抢先设置密码。
 
 ## API 与语言
 
 已提供 `POST /api/v1/applications` 添加应用接口，使用同源会话和
 管理员会话 Cookie 验证。`/api/v1/auth/session`、`/api/v1/auth/login`、
 `/api/v1/auth/logout` 分别用于检查状态、登录和退出。
+`POST /api/v1/auth/setup` 接收 `password` 与 `confirmPassword`，仅首次初始化可用，
+保存后需正常登录，不会自动创建会话。
 目前没有独立 API Token 或 CI 自动化认证能力。
 
 应用界面目前为简体中文；双语支持仅限 README，并非完整的界面国际化。

@@ -49,8 +49,8 @@ pnpm dev
 Open the address printed by Vite. Development authentication only works on
 localhost / 127.0.0.1. Never commit `.dev.vars` or enable `LOCAL_DEV` in production.
 New installations do not contain sample applications.
-To test real login locally, omit `LOCAL_DEV` and set a unique `ADMIN_PASSWORD`
-of 16-256 characters in `.dev.vars` instead.
+To test real login locally, omit `LOCAL_DEV` and create the administrator password
+in the browser on first use. Credentials persist in local D1.
 
 ### Sample Data
 
@@ -91,31 +91,29 @@ present in the configuration is preserved.
 
 **No Cloudflare Zero Trust / Access setup is required.**
 
-1. Set `ADMIN_PASSWORD` in the deployment form to a unique password of 16-256
-   characters. Prefer a password-manager-generated value. The template declares
-   it in `.dev.vars.example` so Cloudflare treats it as a Worker secret, not a
-   public configuration variable.
-   If Cloudflare exposes it as a build secret, `pnpm deploy` explicitly uploads
-   it as a runtime Worker secret in the same deployment. It is not put in source
-   configuration or client assets.
-2. Complete deployment, open the Worker URL, and sign in with that password.
+1. Complete deployment. No administrator password or runtime Secret is required
+   in the deployment form.
+2. Immediately open the Worker URL, create and confirm a unique password of
+   16-256 characters, then sign in. Prefer a password-manager-generated value.
 3. Verify anonymous requests to `/api/v1/applications` return 401 before adding
    real data.
 
-If the secret was omitted or is too short, the site shows setup instructions and
-data APIs return 503. In the Worker dashboard, open Settings > Variables and
-Secrets, add `ADMIN_PASSWORD` with type **Secret**, and deploy the change.
-Never put the real password in `wrangler.jsonc`, source code, or a `VITE_*` variable.
-If you manage the password directly in Worker settings, leave the build-time
-`ADMIN_PASSWORD` unset. When both are set, the build-time value is uploaded on
-each deployment and replaces the runtime value.
+**First-run ownership:** until initialization is complete, anyone who can reach
+the site can create its administrator password. Do not share the URL before
+setup; for sensitive deployments, restrict access temporarily during setup.
+There is no account-ownership verification on this first-run page.
+
+D1 stores a PBKDF2-SHA-256 password hash (100,000 iterations), a random per-password
+salt, and an independent session signing key, never the plaintext password.
+The singleton credential row prevents concurrent or repeated setup from replacing
+the password. Data APIs return 503 until initialization is complete.
+Back up and protect the D1 database, including its credential material.
 
 Sessions expire after 12 hours and use host-only HttpOnly, Secure, SameSite=Strict
 cookies over HTTPS. D1 stores only token hashes and credential-bound tags.
-Logout revokes the current session on the server; changing `ADMIN_PASSWORD`
-invalidates sessions issued under the old password. There is no public signup
-or web-based password reset: reset the Worker secret if you forget it.
-Login attempts are limited to five per minute per IP and Cloudflare location
+Logout revokes the current session on the server. There is no public signup
+after initialization and no web-based password reset.
+Login and setup attempts share a limit of five per minute per IP and Cloudflare location
 through the included rate-limit binding; this is not a global account-wide quota.
 The static page shell contains no private application data. Dynamic preview
 URLs are disabled by default.
@@ -125,7 +123,6 @@ URLs are disabled by default.
 ```sh
 pnpm exec wrangler login
 pnpm deploy
-pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 An actual production deployment has not yet been verified for this repository.
@@ -133,9 +130,8 @@ Set `database_name` in `wrangler.jsonc` before the first deploy if you want a
 different name. To use a specific existing database, set its real `database_id`.
 Local deployments update this configuration with the resolved ID; retain that
 ID in your own deployment repository for subsequent releases.
-The last command securely prompts for the administrator password. Until it is
-set, data APIs stay locked. Deploying the application does not publish local
-sample data.
+Open the deployed URL and create the administrator password before adding data.
+Deploying the application does not publish local sample data.
 
 ### Recovering From D1 Error 10181
 
@@ -153,27 +149,40 @@ name. It never replaces a non-placeholder ID automatically or deletes a database
 ### Updating an Existing Access-Based Installation
 
 Pull the update into your deployment repository, run `pnpm build` and
-`pnpm deploy` (which applies the new session-table migration), and set the
-`ADMIN_PASSWORD` secret. Once password login works, remove the old Access
+`pnpm deploy` (which applies the session and credential migrations), and create
+the password on the first-run page. Once password login works, remove the old Access
 application or its Worker protection if you no longer want the extra login.
 `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are no longer used. Existing application
 and lifecycle records are preserved.
 
-### Password Is Set but the Site Still Shows Setup
+### Existing Secret-Based Installations
 
-Open `/api/v1/auth/session` on the same production hostname. Its
-`configurationIssue` distinguishes `missing` (the running Worker did not receive
-the variable), `too_short`, and `too_long`. A valid password, including exactly
-16 characters, produces `configured: true` and `configurationIssue: null`.
-This endpoint never returns the password or its exact length.
+A valid existing `ADMIN_PASSWORD` runtime Secret still works when no D1 password
+has been created; initialization is then closed. To switch to browser setup,
+remove the legacy runtime Secret and any build-time `ADMIN_PASSWORD`, deploy,
+then immediately initialize in the browser. No application records are removed.
+An invalid legacy Secret must be removed or corrected before setup is available.
+D1 credentials take precedence once created, so a leftover Secret cannot override them.
+The deployment script still forwards an explicitly supplied build-time
+`ADMIN_PASSWORD` for legacy users; leave it unset for browser-based setup.
 
-For `missing`, check the Worker and production environment behind that hostname,
-not only the build configuration. Add the runtime Secret and select Deploy.
-Alternatively, update to the latest deployment script, set the build secret,
-and run a fresh build with deploy command `pnpm deploy`. Build variables alone
-do not become runtime bindings without this explicit upload.
-The setup page rechecks when you return to the tab and every 15 seconds while
-visible; it also has a manual recheck button.
+`GET /api/v1/auth/session` returns `setupRequired: true` only when first-run
+setup is available. It never returns credentials. The page automatically
+rechecks while visible and when returning to the tab.
+
+### Forgotten Password
+
+There is no unauthenticated reset endpoint. As the Cloudflare account owner,
+first restrict access to the site, then run this SQL in the bound D1 console:
+
+```sql
+DELETE FROM admin_credentials;
+DELETE FROM auth_sessions;
+```
+
+Remove any legacy runtime/build `ADMIN_PASSWORD`, then immediately create a new
+password in the browser before reopening access. This preserves application and
+lifecycle records. Anyone with access during this reset window could claim the instance.
 
 To regenerate the deployment badge from the Git remote:
 
@@ -187,6 +196,8 @@ pnpm deploy:button
 authenticated, same-origin requests. Authentication uses the administrator's
 session cookie. `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, and
 `POST /api/v1/auth/logout` provide session status, login, and logout respectively.
+`POST /api/v1/auth/setup` accepts `{ "password": "...", "confirmPassword": "..." }`
+only before an administrator credential exists. It does not log in automatically.
 Dedicated API tokens and CI integration authentication are not implemented.
 
 ## Project Layout

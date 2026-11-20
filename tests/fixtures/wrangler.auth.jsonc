@@ -16,8 +16,6 @@
     "migrations_dir": "../../drizzle"
   }],
   "vars": {
-    // Public test credential only. Never deploy this test configuration.
-    "ADMIN_PASSWORD": "test-only-password-for-browser",
     "LOCAL_DEV": "false"
   },
   "ratelimits": [{

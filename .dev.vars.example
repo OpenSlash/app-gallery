@@ -1,4 +1,3 @@
-# Choose a unique password of 16-256 characters. Never commit the real value.
-# pnpm deploy uploads ADMIN_PASSWORD from the build environment as a runtime secret.
+# Set the administrator password in the browser after the first deployment.
+# No runtime secrets are required. Existing ADMIN_PASSWORD secrets remain supported.
 # For local-only authentication bypass, add LOCAL_DEV=true to .dev.vars.
-ADMIN_PASSWORD=
