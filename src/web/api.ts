@@ -5,6 +5,11 @@ export async function api<T>(path: string, body?: unknown, method = 'POST'): Pro
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const result = await response.json() as T & { error?: string }
-  if (!response.ok) throw new Error(result.error || '请求失败，请稍后再试')
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) {
+      window.dispatchEvent(new Event('gallery-session-expired'))
+    }
+    throw new Error(result.error || '请求失败，请稍后再试')
+  }
   return result
 }

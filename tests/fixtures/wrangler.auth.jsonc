@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "app-gallery-auth-test",
+  "main": "../../src/worker/index.ts",
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "app-gallery-auth-test",
+    "database_id": "00000000-0000-0000-0000-000000000001",
+    "migrations_dir": "../../drizzle"
+  }],
+  "vars": {
+    // Public test credential only. Never deploy this test configuration.
+    "ADMIN_PASSWORD": "test-only-password-for-browser",
+    "LOCAL_DEV": "false"
+  },
+  "ratelimits": [{
+    "name": "LOGIN_RATE_LIMITER",
+    "namespace_id": "48128",
+    "simple": { "limit": 5, "period": 60 }
+  }]
+}

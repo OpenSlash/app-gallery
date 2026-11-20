@@ -38,9 +38,6 @@ importers:
       hono:
         specifier: ^4.13.19
         version: 4.13.19
-      jose:
-        specifier: ^6.2.17
-        version: 6.2.17
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -132,6 +129,12 @@ packages:
 
   '@cloudflare/workerd-linux-64@1.20261116.1':
     resolution: {integrity: sha512-/HnEV29Ykg3t9X6llrnlOJ9+N+cXFNsuPTTdRiE1L/hXIkI39o1RZVjEgj3GtyWtpuhsJ1mNLrNshrEjCvzk0w==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
+  '@cloudflare/workerd-linux-64@1.20261117.1':
+    resolution: {integrity: sha512-gZLA8X11m/luZwn+YA3+mDu61vdxNJzpksP/QZqjydKTQ+VUCulsK5gtn9Bqst1p3KJu2kafQpJ1nDQv4B23jA==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
@@ -1317,9 +1320,6 @@ packages:
     resolution: {integrity: sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA==}
     engines: {node: '>=16.9.0'}
 
-  jose@6.2.17:
-    resolution: {integrity: sha512-wOuK9V1yujQFH5S0ZWmLcDZN7+IKh9bUCC2ZPCf2HDlol3WWHy+PPyNjEI75FXRLMp3vDKQcupP59xhVU95hcg==}
-
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
     engines: {node: '>=6'}
@@ -1757,6 +1757,9 @@ snapshots:
     optional: true
 
   '@cloudflare/workerd-linux-64@1.20261116.1':
+    optional: true
+
+  '@cloudflare/workerd-linux-64@1.20261117.1':
     optional: true
 
   '@cloudflare/workerd-linux-arm64@1.20261116.1':
@@ -2584,8 +2587,6 @@ snapshots:
 
   hono@4.13.19: {}
 
-  jose@6.2.17: {}
-
   kleur@4.1.5: {}
 
   lightningcss-android-arm64@1.33.0:
@@ -2894,6 +2895,7 @@ snapshots:
     optionalDependencies:
       '@cloudflare/workerd-darwin-64': 1.20261117.1
       '@cloudflare/workerd-darwin-arm64': 1.20261117.1
+      '@cloudflare/workerd-linux-64': 1.20261117.1
       '@cloudflare/workerd-linux-arm64': 1.20261117.1
       '@cloudflare/workerd-windows-64': 1.20261117.1
 

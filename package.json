@@ -30,11 +30,8 @@
       "DB": {
         "description": "Stores applications, deployments, and lifecycle history. Create a new D1 database for your instance."
       },
-      "ACCESS_TEAM_DOMAIN": {
-        "description": "Your Access team domain, e.g. my-team.cloudflareaccess.com. The API stays locked until configured."
-      },
-      "ACCESS_AUD": {
-        "description": "The Application Audience (AUD) tag of your Cloudflare Access application."
+      "ADMIN_PASSWORD": {
+        "description": "Choose a unique administrator password (16-256 characters). Stored as a Worker secret. No Cloudflare Access setup is required."
       }
     }
   },
@@ -49,7 +46,6 @@
     "@radix-ui/react-tooltip": "^1.4.1",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.19",
-    "jose": "^6.2.17",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "zod": "^4.6.7"

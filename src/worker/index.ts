@@ -1,41 +1,14 @@
 import { Hono } from 'hono'
-import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { drizzle } from 'drizzle-orm/d1'
 import { applications } from './db/schema'
 import { appInput, nextStatus, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
+import { authentication, authRoutes, type Env } from './auth'
 
-interface Env {
-  DB: D1Database
-  ACCESS_TEAM_DOMAIN: string
-  ACCESS_AUD: string
-  LOCAL_DEV?: string
-}
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>()
-const keysets = new Map<string, ReturnType<typeof createRemoteJWKSet>>()
 
 app.use('/api/*', async (c, next) => {
   c.header('Cache-Control', 'no-store')
   const url = new URL(c.req.url)
-  const local = c.env.LOCAL_DEV === 'true' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-  if (local) {
-    c.set('actor', 'local-developer')
-  } else {
-    const domain = c.env.ACCESS_TEAM_DOMAIN
-    if (!domain || !c.env.ACCESS_AUD || !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(domain)) {
-      return c.json({ error: '站点尚未配置访问保护，请先设置 Cloudflare Access。' }, 503)
-    }
-    const token = c.req.header('Cf-Access-Jwt-Assertion')
-    if (!token) return c.json({ error: '请通过 Cloudflare Access 登录后访问。' }, 401)
-    try {
-      const issuer = `https://${domain}`
-      if (!keysets.has(issuer)) keysets.set(issuer, createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`)))
-      const { payload } = await jwtVerify(token, keysets.get(issuer)!, { issuer, audience: c.env.ACCESS_AUD })
-      if (!payload.sub || !payload.exp) throw new Error('Missing claims')
-      c.set('actor', typeof payload.email === 'string' ? payload.email : payload.sub)
-    } catch {
-      return c.json({ error: '登录已失效，请重新通过 Access 登录。' }, 401)
-    }
-  }
   if (!['GET', 'HEAD'].includes(c.req.method)) {
     if (c.req.header('Origin') !== url.origin) return c.json({ error: '请求来源不被允许。' }, 403)
     if (!c.req.header('Content-Type')?.startsWith('application/json')) return c.json({ error: '请使用 JSON 请求。' }, 415)
@@ -46,6 +19,8 @@ app.use('/api/*', async (c, next) => {
   }
   await next()
 })
+app.use('/api/*', authentication)
+app.route('/api/v1/auth', authRoutes)
 
 app.get('/api/v1/applications', async c => {
   const now = Date.now()

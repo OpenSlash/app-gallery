@@ -36,7 +36,7 @@ API 现阶段一次返回私有小型目录，搜索与分页扩展留待后续�
 | 请求校验 | Zod | 校验 API 输入和导入文件 |
 | 数据访问 | Drizzle ORM，D1 适配器 | 表结构、类型和 SQL 迁移管理 |
 | 数据库 | Cloudflare D1 | 通过 Worker binding 访问，不使用本地持久文件 |
-| 身份保护 | Cloudflare Access | 邮箱白名单或已有身份提供方 |
+| 身份保护 | 内置管理员密码登录 | Worker Secret、D1 会话、HttpOnly Cookie，不依赖 Zero Trust |
 | 发布工具 | Wrangler + Cloudflare Vite plugin | 本地开发、预览和生产发布 |
 | 测试 | Vitest + Workers 测试环境、Playwright | 业务规则、D1 集成和页面流程 |
 | 包管理 | pnpm | 锁定依赖，具体版本在初始化时确定 |
@@ -53,9 +53,6 @@ D1 适配器。参考资料见文末。
 浏览器
   |
   | HTTPS
-  v
-Cloudflare Access
-  |
   v
 Workers + Static Assets
   |
@@ -221,11 +218,12 @@ wrangler.jsonc
 
 ## 7. 安全与环境隔离
 
-- Cloudflare Access 保护整个站点，授权邮箱范围保持最小。
-- API 验证 `Cf-Access-Jwt-Assertion` 的签名、issuer、audience 和有效期，
-  不信任单独传入的邮箱请求头。
-- 关闭未受保护的 `workers.dev` 和预览访问入口，或配置等价保护；
-  不允许绕过自定义域名直接访问数据 API。
+- 使用单管理员密码登录，`ADMIN_PASSWORD` 以 Worker Secret 保存，长度为 16 至 256 位。
+- API 验证服务器端会话；HTTPS Cookie 使用 HttpOnly、Secure、SameSite=Strict，
+  会话有效期为 12 小时，D1 仅保存令牌哈希和绑定当前密码的校验值。
+- 退出撤销当前会话，修改密码使旧密码签发的会话失效；没有公开注册或网页重置入口。
+- 登录使用 Workers 限流绑定，按 IP 和节点约每分钟 5 次；不是全局严格配额。
+- 保留 `workers.dev` 访问入口，数据 API 独立认证；默认关闭动态预览 URL。
 - 本地身份模拟只允许在明确的本地配置启用，生产环境缺失认证配置时拒绝访问。
 - 写接口校验 Origin，要求 JSON Content-Type，不启用宽泛 CORS。
 - 私有 API 使用 `Cache-Control: no-store`，不写入公共 CDN 缓存。
@@ -233,16 +231,16 @@ wrangler.jsonc
 - 第一版不服务端抓取用户输入 URL，不自动下载远程图标，避免 SSRF。
 - 日志记录请求 ID、耗时、结果，不记录身份令牌、完整导出内容或敏感查询参数。
 
-本地、预览和生产使用不同 D1 数据库及 Access audience。
-数据库 binding 固定为 `DB`；`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 和
-`APP_TIMEZONE` 为环境配置，部署凭据只放在 CI 或本地凭据存储。
+本地、预览和生产应使用不同 D1 数据库及管理员密码。
+数据库 binding 固定为 `DB`；`APP_TIMEZONE` 为环境配置，
+`ADMIN_PASSWORD` 仅存储为 Secret，部署凭据只放在 CI 或本地凭据存储。
 
 ## 8. 部署、迁移与恢复
 
 部署顺序：
 
-1. 创建生产 D1，配置正式域名和 Access 应用。
-2. 配置 Worker bindings、环境变量和访问入口限制。
+1. 使用部署按钮创建 Worker 和 D1；不再需要预先创建 Access 应用。
+2. 设置 `ADMIN_PASSWORD` Secret 和登录限流绑定；密码未配置时锁定数据 API。
 3. 在预览环境执行迁移、集成测试和权限验证。
 4. 生产迁移前创建可恢复备份，迁移完成后发布应用。
 5. 验证登录、未授权拒绝、应用查询和生命周期写入。
@@ -255,7 +253,7 @@ D1 Time Travel 用于平台内恢复，保留窗口取决于计划，实施时�
 第一版提供手动导出和备份操作说明，自动备份作为后续增强，
 发布生产版本前必须演练一次导出与恢复。
 
-暂不固定承诺零费用。上线时核对 Workers、D1 和 Access 的当期额度，
+暂不固定承诺零费用。上线时核对 Workers、D1 和限流绑定的当期额度，
 设置可用的用量通知并定期检查。业务逻辑不依赖进程常驻或本地磁盘。
 
 ## 9. 第一版验收
@@ -285,6 +283,7 @@ D1 Time Travel 用于平台内恢复，保留窗口取决于计划，实施时�
 
 - React + Vite 全栈部署：`https://developers.cloudflare.com/workers/framework-guides/web-apps/react/`
 - 静态资源路由：`https://developers.cloudflare.com/workers/static-assets/binding/`
-- Access JWT 校验：`https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/`
+- Worker Secrets：`https://developers.cloudflare.com/workers/configuration/secrets/`
+- 登录限流：`https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/`
 - Drizzle D1 适配器：`https://orm.drizzle.team/docs/sqlite/connect-cloudflare-d1`
 - D1 恢复：`https://developers.cloudflare.com/d1/reference/time-travel/`

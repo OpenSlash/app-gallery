@@ -15,7 +15,7 @@ A private launchpad and lifecycle log for your websites, infrastructure services
 - View elapsed days and cumulative active periods from lifecycle records.
 - Archive retired or not-yet-launched apps without deleting their history.
 - Accessible Radix UI primitives and 16 application icons from Radix Icons.
-- D1 persistence, validated APIs, and Cloudflare Access JWT verification.
+- D1 persistence, validated APIs, and built-in administrator password login.
 
 Each application currently has one production deployment and one URL. Dates use
 UTC. Durations describe recorded lifecycle periods, **not monitored uptime**.
@@ -39,7 +39,7 @@ pnpm install --frozen-lockfile
 cp .dev.vars.example .dev.vars
 ```
 
-Set `LOCAL_DEV=true` in your local `.dev.vars`, then run:
+For local-only authentication bypass, add `LOCAL_DEV=true` to `.dev.vars`, then run:
 
 ```sh
 pnpm db:local
@@ -49,6 +49,8 @@ pnpm dev
 Open the address printed by Vite. Development authentication only works on
 localhost / 127.0.0.1. Never commit `.dev.vars` or enable `LOCAL_DEV` in production.
 New installations do not contain sample applications.
+To test real login locally, omit `LOCAL_DEV` and set a unique `ADMIN_PASSWORD`
+of 16-256 characters in `.dev.vars` instead.
 
 ### Sample Data
 
@@ -83,23 +85,30 @@ D1 and replaces the template database ID. Use `pnpm build` as the build command
 and `pnpm deploy` as the deploy command. The deploy script applies database
 migrations through the `DB` binding before publishing the Worker.
 
-**The button deploys the application, but does not configure your identity
-provider.** Before storing real data:
+**No Cloudflare Zero Trust / Access setup is required.**
 
-1. Create a Cloudflare Access application with a minimal email allowlist.
-2. Set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` in `wrangler.jsonc` under `vars`
-   (or the generated configuration committed by the deployment flow), then
-   rebuild and deploy. Dashboard-only changes may be overwritten by empty
-   values in the repository on subsequent deployments.
-3. Protect the site with Access on your custom domain, or configure Access
-   protection for its `workers.dev` address.
-4. Verify that anonymous requests are denied and authorized users can read
-   and write data.
+1. Set `ADMIN_PASSWORD` in the deployment form to a unique password of 16-256
+   characters. Prefer a password-manager-generated value. The template declares
+   it in `.dev.vars.example` so Cloudflare treats it as a Worker secret, not a
+   public configuration variable.
+2. Complete deployment, open the Worker URL, and sign in with that password.
+3. Verify anonymous requests to `/api/v1/applications` return 401 before adding
+   real data.
 
-The API returns 503 when Access is unconfigured and 401 for missing or invalid
-JWTs. It verifies JWTs independently of domain-level protection. The static
-page shell contains no private application data. Dynamic preview URLs are
-disabled by default.
+If the secret was omitted or is too short, the site shows setup instructions and
+data APIs return 503. In the Worker dashboard, open Settings > Variables and
+Secrets, add `ADMIN_PASSWORD` with type **Secret**, and deploy the change.
+Never put the real password in `wrangler.jsonc`, source code, or a `VITE_*` variable.
+
+Sessions expire after 12 hours and use host-only HttpOnly, Secure, SameSite=Strict
+cookies over HTTPS. D1 stores only token hashes and credential-bound tags.
+Logout revokes the current session on the server; changing `ADMIN_PASSWORD`
+invalidates sessions issued under the old password. There is no public signup
+or web-based password reset: reset the Worker secret if you forget it.
+Login attempts are limited to five per minute per IP and Cloudflare location
+through the included rate-limit binding; this is not a global account-wide quota.
+The static page shell contains no private application data. Dynamic preview
+URLs are disabled by default.
 
 ### Manual Deployment
 
@@ -108,15 +117,27 @@ pnpm exec wrangler login
 pnpm exec wrangler d1 create app-gallery
 ```
 
-Replace the placeholder database ID in `wrangler.jsonc` with the real ID and
-configure the Access variables described above, then run:
+Replace the placeholder database ID in `wrangler.jsonc` with the real ID, then run:
 
 ```sh
 pnpm build
 pnpm deploy
+pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 An actual production deployment has not yet been verified for this repository.
+The last command securely prompts for the administrator password. Until it is
+set, data APIs stay locked. Deploying the application does not publish local
+sample data.
+
+### Updating an Existing Access-Based Installation
+
+Pull the update into your deployment repository, run `pnpm build` and
+`pnpm deploy` (which applies the new session-table migration), and set the
+`ADMIN_PASSWORD` secret. Once password login works, remove the old Access
+application or its Worker protection if you no longer want the extra login.
+`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are no longer used. Existing application
+and lifecycle records are preserved.
 
 To regenerate the deployment badge from the Git remote:
 
@@ -127,7 +148,9 @@ pnpm deploy:button
 ## API
 
 `POST /api/v1/applications` is available for adding applications through
-authenticated, same-origin requests. Authentication uses Cloudflare Access.
+authenticated, same-origin requests. Authentication uses the administrator's
+session cookie. `GET /api/v1/auth/session`, `POST /api/v1/auth/login`, and
+`POST /api/v1/auth/logout` provide session status, login, and logout respectively.
 Dedicated API tokens and CI integration authentication are not implemented.
 
 ## Project Layout

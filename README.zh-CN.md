@@ -23,7 +23,7 @@
 - 应用新增、编辑、搜索、分类、标签、类型筛选、排序、收藏。
 - 首次上线日期补录，暂停、恢复、下线、发布和备注时间线。
 - 下线或未上线应用归档；数据保留，首页隐藏。
-- D1 数据持久化、API 校验、Access JWT 验证与未配置时安全锁定。
+- D1 数据持久化、API 校验、内置管理员密码登录与未配置时安全锁定。
 
 当前每个应用只管理一个生产部署、一个访问地址。多环境、多入口、
 迁移、导入导出、在线监测及文件上传不在这一轮实现。
@@ -38,7 +38,7 @@ pnpm install --frozen-lockfile
 cp .dev.vars.example .dev.vars
 ```
 
-将本地 `.dev.vars` 中的 `LOCAL_DEV` 改为 `true`，再执行：
+仅本地开发时，可在 `.dev.vars` 中添加 `LOCAL_DEV=true`，再执行：
 
 ```sh
 pnpm db:local
@@ -48,6 +48,8 @@ pnpm dev
 打开终端输出的本地地址。开发身份仅在 localhost / 127.0.0.1 生效。
 不要将 `LOCAL_DEV=true` 添加到生产配置。
 示例预览不写入数据库，新安装实例不会预置示例应用。
+需要测试真实登录时，不设置 `LOCAL_DEV`，改为在 `.dev.vars` 中设置
+16 至 256 位的独立 `ADMIN_PASSWORD`。
 
 需要可以编辑、收藏和查看历史的持久化模拟数据时，执行：
 
@@ -90,19 +92,25 @@ pnpm deploy:button https://github.com/OpenSlash/app-gallery
 在 Cloudflare 部署页面接受 `pnpm build` 和 `pnpm deploy` 命令；
 Cloudflare 自动创建 D1 并替换模板数据库 ID，发布脚本通过 `DB` binding 建表。
 
-这是一键部署应用，不是一键配置身份提供方。上线前仍需：
+**不再需要开通或配置 Cloudflare Zero Trust / Access。**
 
-1. 创建 Cloudflare Access 应用，设置最小邮箱白名单。
-2. 将 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 填入 `wrangler.jsonc` 的
-   `vars`（或部署页面同步到仓库的配置），重新构建并发布。
-   不要只改后台变量却在仓库保留空值，否则下次部署可能覆盖配置。
-3. 使用自定义域名保护整个站点，或在 workers.dev 上启用相应 Access 保护。
-4. 验证匿名请求被拒绝，授权用户可读写，再录入真实资料。
+1. 在部署页面的 `ADMIN_PASSWORD` 中设置 16 至 256 位的独立长密码，
+   建议使用密码管理器生成。该字段由 `.dev.vars.example` 声明，
+   Cloudflare 将其作为 Worker Secret，而不是公开配置变量。
+2. 完成部署，打开 Worker 地址，用该密码登录。
+3. 确认未登录请求 `/api/v1/applications` 返回 401，再录入真实资料。
 
-未配置 Access 时 API 返回 503；缺少合法 JWT 时返回 401。
-`workers.dev` 默认保留以便部署后访问，API 也会独立验证 JWT，
-不会因为某个域名未受 Access 保护而泄露数据。页面外壳不包含业务数据。
-动态预览 URL 默认关闭。
+未设置密码或密码过短时，页面显示配置指引，数据 API 返回 503。
+可在 Worker 的设置 > 变量和机密中，添加类型为 **Secret** 的
+`ADMIN_PASSWORD`，保存并部署。不要将真实密码放入 `wrangler.jsonc`、
+源代码或 `VITE_*` 变量。
+
+会话有效期 12 小时，HTTPS 下使用仅限当前主机的 HttpOnly、Secure、
+SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值；
+退出会撤销服务端会话，修改密码会使旧密码签发的会话失效。
+没有公开注册或网页找回密码入口，忘记密码时修改 Worker Secret 即可。
+内置登录限流按 IP 和 Cloudflare 节点限制每分钟 5 次，不是全局严格配额。
+页面外壳不包含业务数据，动态预览 URL 默认关闭。
 
 ### 命令行部署
 
@@ -113,14 +121,25 @@ pnpm exec wrangler login
 pnpm exec wrangler d1 create app-gallery
 pnpm build
 pnpm deploy
+pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 生产账号资源和真实云端发布尚未在本仓库执行。
+最后一条命令会安全提示输入管理员密码；设置完成前数据接口保持锁定。
+
+### 旧版本升级
+
+将更新拉取到你的部署仓库，执行 `pnpm build` 和 `pnpm deploy`，
+后者会应用新增的会话表迁移，再设置 `ADMIN_PASSWORD` Secret。
+确认密码登录正常后，可移除旧 Access 应用或 Worker 保护，避免额外登录。
+`ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 不再使用，已有应用及历史数据保留。
 
 ## API 与语言
 
 已提供 `POST /api/v1/applications` 添加应用接口，使用同源会话和
-Cloudflare Access 身份验证。目前没有独立 API Token 或 CI 自动化认证能力。
+管理员会话 Cookie 验证。`/api/v1/auth/session`、`/api/v1/auth/login`、
+`/api/v1/auth/logout` 分别用于检查状态、登录和退出。
+目前没有独立 API Token 或 CI 自动化认证能力。
 
 应用界面目前为简体中文；双语支持仅限 README，并非完整的界面国际化。
 详细架构见 [技术方案](docs/technical-design.md)，其中包含尚未实现的后续规划。

@@ -20,9 +20,14 @@
     }
   ],
   "vars": {
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": "",
     "APP_TIMEZONE": "UTC"
   },
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      "namespace_id": "48127",
+      "simple": { "limit": 5, "period": 60 }
+    }
+  ],
   "observability": { "enabled": true }
 }
