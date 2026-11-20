@@ -92,7 +92,8 @@ pnpm deploy:button https://github.com/OpenSlash/app-gallery
 在 Cloudflare 部署页面使用构建命令 `pnpm build`，部署命令必须为
 **`pnpm deploy`**，不能只执行 `wrangler deploy`。
 发布脚本会先查找配置名称对应的 D1，不存在时创建，再将真实 ID 写入
-`wrangler.jsonc`，执行迁移，并重新构建 Vite 产物后发布。
+`wrangler.jsonc`，执行迁移，以零行查询检查必要表和字段，
+并重新构建 Vite 产物后发布。
 若构建产物的 ID 与实际绑定不一致，会终止发布。
 Cloudflare 模板流程也可能提前创建数据库；已有真实 ID 时会保留。
 
@@ -172,6 +173,15 @@ DELETE FROM auth_sessions;
 
 移除遗留的运行时和构建 `ADMIN_PASSWORD`，立即在页面创建新密码，再恢复访问。
 此操作保留所有应用及生命周期记录；重置窗口中任何访问者都可能抢先设置密码。
+
+### 数据库初始化错误
+
+若页面提示未绑定数据库，检查生产 Worker 是否有名称精确为 `DB` 的 D1 绑定。
+若提示缺表或字段，需在同一数据库执行迁移，不能操作另一份同名数据库。
+在 Workers Builds 中将**部署命令**设为 `pnpm deploy`，
+构建命令仍为 `pnpm build`，然后从最新提交重新构建。
+仅运行 `wrangler deploy` 不会应用本项目迁移。不要删除数据库或手工重建凭据表。
+其他异常会提供可在 Worker 日志中查找的错误编号；排查时不要分享密码或 Cookie。
 
 ## API 与语言
 

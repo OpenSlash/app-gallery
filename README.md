@@ -84,7 +84,8 @@ Use the button above to create your own instance. Use `pnpm build` as the build
 command and **`pnpm deploy`** as the deploy command, not bare `wrangler deploy`.
 The deploy script resolves the `DB` binding, reuses a database with the configured
 name or creates one if needed, and writes its real ID into `wrangler.jsonc`.
-It applies migrations, rebuilds Vite output with the resolved binding, and only
+It applies migrations, verifies the required database schema without reading any
+rows, rebuilds Vite output with the resolved binding, and only
 then publishes. It refuses to publish if the built ID does not match.
 Cloudflare may also provision the database during template setup; an ID already
 present in the configuration is preserved.
@@ -183,6 +184,17 @@ DELETE FROM auth_sessions;
 Remove any legacy runtime/build `ADMIN_PASSWORD`, then immediately create a new
 password in the browser before reopening access. This preserves application and
 lifecycle records. Anyone with access during this reset window could claim the instance.
+
+### Database Setup Errors
+
+If the page reports a missing database binding, verify that the production Worker
+has a D1 binding named `DB`. Missing tables or columns require migrations on that
+same database, not another database with a similar name. In Workers Builds, set
+the **deploy command** to `pnpm deploy` (the build command remains `pnpm build`),
+then start a new build from the latest commit. Bare `wrangler deploy` does not
+apply the application's migrations. Do not delete the database or manually
+recreate credential tables. Unexpected failures include a request ID that can
+be matched against Worker logs; do not share passwords or session cookies.
 
 To regenerate the deployment badge from the Git remote:
 

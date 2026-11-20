@@ -79,6 +79,9 @@ export function deploy({ root = process.cwd(), run = runCommand, log = console.l
 
   log('Applying D1 migrations before publishing the Worker...')
   execute('wrangler', ['d1', 'migrations', 'apply', 'DB', '--remote', '--config', sourcePath])
+  log('Checking required D1 schema before publishing...')
+  execute('wrangler', ['d1', 'execute', 'DB', '--remote', '--config', sourcePath, '--command',
+    'SELECT a.id, d.id, p.started_at, e.id, s.token_hash, c.password_hash, c.salt, c.iterations, c.session_secret FROM applications a, deployments d, lifecycle_periods p, events e, auth_sessions s, admin_credentials c LIMIT 0'])
   // Vite embeds bindings in dist: rebuild after provisioning, never publish stale IDs.
   execute('pnpm', ['build'])
   config = readConfig(builtPath).config

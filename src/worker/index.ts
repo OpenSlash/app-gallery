@@ -19,6 +19,16 @@ app.use('/api/*', async (c, next) => {
   }
   await next()
 })
+app.use('/api/*', async (c, next) => {
+  if (!(c.env.LOCAL_DEV === 'true' && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(c.req.url).hostname)) &&
+    typeof c.env.DB?.prepare !== 'function') {
+    return c.json({
+      code: 'DB_BINDING_MISSING',
+      error: '当前 Worker 未绑定 D1 数据库。请检查绑定名称为 DB，并使用 pnpm deploy 完成部署。',
+    }, 503)
+  }
+  await next()
+})
 app.use('/api/*', authentication)
 app.route('/api/v1/auth', authRoutes)
 
@@ -134,8 +144,21 @@ app.onError((error, c) => {
   if (error.name === 'ZodError') return c.json({ error: '输入内容不合法，请检查名称、地址、日期和字段长度。' }, 400)
   if (error instanceof SyntaxError) return c.json({ error: 'JSON 格式不正确。' }, 400)
   if (String(error.cause ?? error).includes('revision_conflict')) return c.json({ error: '数据已被修改，请刷新后重试。' }, 409)
-  console.error('API failure', error.message)
-  return c.json({ error: '操作失败，请稍后重试。' }, 500)
+  const requestId = crypto.randomUUID()
+  const messages: string[] = []
+  let cause: unknown = error
+  for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
+    messages.push(cause.message)
+    cause = cause.cause
+  }
+  console.error('API failure', requestId, ...messages)
+  if (messages.some(message => /no such (?:table|column)\b/i.test(message))) {
+    return c.json({
+      code: 'DB_MIGRATIONS_REQUIRED', requestId,
+      error: '数据库缺少所需的表或字段。请确认 DB 绑定的是正确数据库，并将 Cloudflare 构建设置中的部署命令改为 pnpm deploy，从最新提交重新构建部署。',
+    }, 503)
+  }
+  return c.json({ code: 'INTERNAL_ERROR', requestId, error: `操作失败，请在 Worker 日志中查询错误编号：${requestId}` }, 500)
 })
 
 export default app

@@ -253,3 +253,48 @@ describe('首次部署设置密码', () => {
     expect((await request('/missing', { headers: { Cookie: current } })).status).toBe(404)
   })
 })
+
+describe('部署故障诊断', () => {
+  it('缺少 D1 绑定时返回明确配置错误，不开放数据或设置接口', async () => {
+    const bindings = { ADMIN_PASSWORD: password }
+    for (const path of ['/auth/session', '/applications']) {
+      const response = await request(path, {}, bindings)
+      expect(response.status).toBe(503)
+      expect(await response.json()).toMatchObject({ code: 'DB_BINDING_MISSING' })
+    }
+    const response = await request('/auth/setup', {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}',
+    }, bindings)
+    expect(response.status).toBe(503)
+  })
+  it('旧数据库缺少凭据表时提示迁移，不返回 SQL 或数据库原始错误', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      sqlite.exec('DROP TABLE admin_credentials')
+      const response = await request('/auth/session')
+      expect(response.status).toBe(503)
+      const body = await response.json() as { code: string; error: string; requestId: string }
+      expect(body.code).toBe('DB_MIGRATIONS_REQUIRED')
+      expect(body.error).toContain('pnpm deploy')
+      expect(body.error).not.toContain('SELECT')
+      expect(log.mock.calls[0]).toContain(body.requestId)
+    } finally { log.mockRestore() }
+  })
+  it('识别嵌套的 D1 缺字段错误，其他故障只返回关联错误编号', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const prepare = vi.spyOn(env.DB, 'prepare')
+    try {
+      prepare.mockImplementation(() => { throw new Error('D1_ERROR', { cause: new Error('no such column: salt') }) })
+      const response = await request('/auth/session')
+      expect(response.status).toBe(503)
+      expect(await response.json()).toMatchObject({ code: 'DB_MIGRATIONS_REQUIRED' })
+      prepare.mockImplementation(() => { throw new Error('private internal details') })
+      const unknown = await request('/auth/session')
+      expect(unknown.status).toBe(500)
+      const body = await unknown.json() as { code: string; error: string; requestId: string }
+      expect(body.code).toBe('INTERNAL_ERROR')
+      expect(body.error).toContain(body.requestId)
+      expect(body.error).not.toContain('private internal details')
+    } finally { prepare.mockRestore(); log.mockRestore() }
+  })
+})

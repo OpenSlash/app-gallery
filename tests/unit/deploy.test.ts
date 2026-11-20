@@ -36,6 +36,11 @@ const run = (command: string, args: string[]) => {
     expect(args).toEqual(['d1', 'migrations', 'apply', 'DB', '--remote', '--config', source()])
     expect(read(source()).d1_databases[0].database_id).toBe(id)
   }
+  if (step === 'execute') {
+    expect(args.slice(0, 8)).toEqual(['d1', 'execute', 'DB', '--remote', '--config', source(), '--command', expect.any(String)])
+    expect(args[7]).toContain('admin_credentials')
+    expect(args[7]).toContain('LIMIT 0')
+  }
   if (step === 'build' && !staleBuild) {
     mkdirSync(join(root, 'dist/worker'), { recursive: true })
     writeFileSync(built(), JSON.stringify(read(source())))
@@ -70,13 +75,13 @@ afterEach(() => rmSync(root, { recursive: true, force: true }))
 describe('D1 deployment orchestration', () => {
   it('creates the database before migrations, rebuilds, then publishes the resolved configuration', () => {
     execute()
-    expect(calls).toEqual(['list', 'create', 'list', 'migrate', 'build', 'publish'])
+    expect(calls).toEqual(['list', 'create', 'list', 'migrate', 'execute', 'build', 'publish'])
     expect(readFileSync(source(), 'utf8')).toContain('// Preserve deployment comments.')
   })
   it('reuses an existing database by its configured name', () => {
     databases = [{ name: 'my-gallery', uuid: id }]
     execute()
-    expect(calls).toEqual(['list', 'migrate', 'build', 'publish'])
+    expect(calls).toEqual(['list', 'migrate', 'execute', 'build', 'publish'])
   })
   it('repairs legacy all-zero IDs and does not publish stale Vite output', () => {
     configure({ database_id: zero })
@@ -88,16 +93,16 @@ describe('D1 deployment orchestration', () => {
   it('preserves explicit database IDs and avoids creating or listing resources', () => {
     configure({ database_id: id })
     execute()
-    expect(calls).toEqual(['migrate', 'build', 'publish'])
+    expect(calls).toEqual(['migrate', 'execute', 'build', 'publish'])
   })
   it('does not create a second database on subsequent deployments', () => {
     execute()
     calls = []
     execute()
-    expect(calls).toEqual(['migrate', 'build', 'publish'])
+    expect(calls).toEqual(['migrate', 'execute', 'build', 'publish'])
     expect(databases).toHaveLength(1)
   })
-  it.each(['list', 'create', 'migrate', 'build'])('stops on %s failure without publishing', step => {
+  it.each(['list', 'create', 'migrate', 'execute', 'build'])('stops on %s failure without publishing', step => {
     fail = step
     expect(execute).toThrow(`Simulated ${step} failure`)
     expect(calls).not.toContain('publish')
