@@ -80,10 +80,14 @@ End-to-end tests write to local D1 and archive their test applications on succes
 
 ## Deploy to Cloudflare
 
-Use the button above to create your own instance. The deployment flow provisions
-D1 and replaces the template database ID. Use `pnpm build` as the build command
-and `pnpm deploy` as the deploy command. The deploy script applies database
-migrations through the `DB` binding before publishing the Worker.
+Use the button above to create your own instance. Use `pnpm build` as the build
+command and **`pnpm deploy`** as the deploy command, not bare `wrangler deploy`.
+The deploy script resolves the `DB` binding, reuses a database with the configured
+name or creates one if needed, and writes its real ID into `wrangler.jsonc`.
+It applies migrations, rebuilds Vite output with the resolved binding, and only
+then publishes. It refuses to publish if the built ID does not match.
+Cloudflare may also provision the database during template setup; an ID already
+present in the configuration is preserved.
 
 **No Cloudflare Zero Trust / Access setup is required.**
 
@@ -114,21 +118,31 @@ URLs are disabled by default.
 
 ```sh
 pnpm exec wrangler login
-pnpm exec wrangler d1 create app-gallery
-```
-
-Replace the placeholder database ID in `wrangler.jsonc` with the real ID, then run:
-
-```sh
-pnpm build
 pnpm deploy
 pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 An actual production deployment has not yet been verified for this repository.
+Set `database_name` in `wrangler.jsonc` before the first deploy if you want a
+different name. To use a specific existing database, set its real `database_id`.
+Local deployments update this configuration with the resolved ID; retain that
+ID in your own deployment repository for subsequent releases.
 The last command securely prompts for the administrator password. Until it is
 set, data APIs stay locked. Deploying the application does not publish local
 sample data.
+
+### Recovering From D1 Error 10181
+
+If deployment reports database `00000000-0000-0000-0000-000000000000` was not
+found, it is using an older template or stale build. Update the repository
+connected to Cloudflare, not just the upstream repository. If Cloudflare cloned
+the template into your account, sync that copy first.
+
+In Workers Builds settings, ensure the deploy command is `pnpm deploy`, then
+start a **new build from the updated commit**. Do not merely retry the old
+artifact or add a dashboard binding while leaving the fake ID in source.
+The deploy script repairs legacy zero IDs by resolving the configured database
+name. It never replaces a non-placeholder ID automatically or deletes a database.
 
 ### Updating an Existing Access-Based Installation
 

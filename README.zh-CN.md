@@ -89,8 +89,12 @@ pnpm deploy:button https://github.com/OpenSlash/app-gallery
 
 也可以在已设置 Git origin 后直接执行 `pnpm deploy:button`。
 命令输出该仓库的 Deploy to Cloudflare 按钮 Markdown。
-在 Cloudflare 部署页面接受 `pnpm build` 和 `pnpm deploy` 命令；
-Cloudflare 自动创建 D1 并替换模板数据库 ID，发布脚本通过 `DB` binding 建表。
+在 Cloudflare 部署页面使用构建命令 `pnpm build`，部署命令必须为
+**`pnpm deploy`**，不能只执行 `wrangler deploy`。
+发布脚本会先查找配置名称对应的 D1，不存在时创建，再将真实 ID 写入
+`wrangler.jsonc`，执行迁移，并重新构建 Vite 产物后发布。
+若构建产物的 ID 与实际绑定不一致，会终止发布。
+Cloudflare 模板流程也可能提前创建数据库；已有真实 ID 时会保留。
 
 **不再需要开通或配置 Cloudflare Zero Trust / Access。**
 
@@ -114,18 +118,29 @@ SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值�
 
 ### 命令行部署
 
-不使用部署按钮时，先登录、创建 D1，并将实际 ID 写入 `wrangler.jsonc`：
+不使用部署按钮时，先登录，再执行完整部署：
 
 ```sh
 pnpm exec wrangler login
-pnpm exec wrangler d1 create app-gallery
-pnpm build
 pnpm deploy
 pnpm exec wrangler secret put ADMIN_PASSWORD
 ```
 
 生产账号资源和真实云端发布尚未在本仓库执行。
+如需其他数据库名称，在首次部署前修改 `wrangler.jsonc` 中的 `database_name`；
+如需使用指定数据库，直接填入其真实 `database_id`。命令行部署会将解析到的
+真实 ID 写入配置，建议在自己的部署仓库中保留该 ID。
 最后一条命令会安全提示输入管理员密码；设置完成前数据接口保持锁定。
+
+### D1 错误 10181 恢复
+
+若报错中的数据库 ID 为 `00000000-0000-0000-0000-000000000000`，
+说明仍在使用旧模板或旧构建。先更新 Cloudflare 实际关联的仓库；
+若一键部署复制了一份仓库到你的账号，需要同步那份副本，不能只更新上游。
+
+在 Workers Builds 设置中确认部署命令为 `pnpm deploy`，然后从最新提交
+启动一次全新构建。不要只重试旧产物，也不要仅在后台添加绑定却保留源码的假 ID。
+新版脚本会根据配置名称修复旧版全零 ID，不会自动替换非占位 ID，也不会删除数据库。
 
 ### 旧版本升级
 
