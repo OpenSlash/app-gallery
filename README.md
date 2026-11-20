@@ -95,6 +95,9 @@ present in the configuration is preserved.
    characters. Prefer a password-manager-generated value. The template declares
    it in `.dev.vars.example` so Cloudflare treats it as a Worker secret, not a
    public configuration variable.
+   If Cloudflare exposes it as a build secret, `pnpm deploy` explicitly uploads
+   it as a runtime Worker secret in the same deployment. It is not put in source
+   configuration or client assets.
 2. Complete deployment, open the Worker URL, and sign in with that password.
 3. Verify anonymous requests to `/api/v1/applications` return 401 before adding
    real data.
@@ -103,6 +106,9 @@ If the secret was omitted or is too short, the site shows setup instructions and
 data APIs return 503. In the Worker dashboard, open Settings > Variables and
 Secrets, add `ADMIN_PASSWORD` with type **Secret**, and deploy the change.
 Never put the real password in `wrangler.jsonc`, source code, or a `VITE_*` variable.
+If you manage the password directly in Worker settings, leave the build-time
+`ADMIN_PASSWORD` unset. When both are set, the build-time value is uploaded on
+each deployment and replaces the runtime value.
 
 Sessions expire after 12 hours and use host-only HttpOnly, Secure, SameSite=Strict
 cookies over HTTPS. D1 stores only token hashes and credential-bound tags.
@@ -152,6 +158,22 @@ Pull the update into your deployment repository, run `pnpm build` and
 application or its Worker protection if you no longer want the extra login.
 `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are no longer used. Existing application
 and lifecycle records are preserved.
+
+### Password Is Set but the Site Still Shows Setup
+
+Open `/api/v1/auth/session` on the same production hostname. Its
+`configurationIssue` distinguishes `missing` (the running Worker did not receive
+the variable), `too_short`, and `too_long`. A valid password, including exactly
+16 characters, produces `configured: true` and `configurationIssue: null`.
+This endpoint never returns the password or its exact length.
+
+For `missing`, check the Worker and production environment behind that hostname,
+not only the build configuration. Add the runtime Secret and select Deploy.
+Alternatively, update to the latest deployment script, set the build secret,
+and run a fresh build with deploy command `pnpm deploy`. Build variables alone
+do not become runtime bindings without this explicit upload.
+The setup page rechecks when you return to the tab and every 15 seconds while
+visible; it also has a manual recheck button.
 
 To regenerate the deployment badge from the Git remote:
 

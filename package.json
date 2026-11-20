@@ -31,7 +31,7 @@
         "description": "Stores applications, deployments, and lifecycle history. Create a new D1 database for your instance."
       },
       "ADMIN_PASSWORD": {
-        "description": "Choose a unique administrator password (16-256 characters). Stored as a Worker secret. No Cloudflare Access setup is required."
+        "description": "Choose a unique administrator password (16-256 characters). pnpm deploy uploads this build secret as a runtime Worker secret. No Cloudflare Access setup is required."
       }
     }
   },

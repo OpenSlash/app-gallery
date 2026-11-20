@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
 import { GridIcon } from '../icons'
+import type { PasswordConfigurationIssue } from '../../shared/auth'
 
-type Session = { configured: boolean; authenticated: boolean; localDev: boolean }
+type Session = { configured: boolean; authenticated: boolean; localDev: boolean; configurationIssue?: PasswordConfigurationIssue }
 
 export function AuthGate({ children }: {
   children: (session: Session, logout: () => Promise<void>) => ReactNode
@@ -11,6 +12,7 @@ export function AuthGate({ children }: {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const issue = session?.configurationIssue
 
   async function check() {
     const result = await api<Session>('/auth/session')
@@ -28,6 +30,23 @@ export function AuthGate({ children }: {
     window.addEventListener('gallery-session-expired', expired)
     return () => { active = false; window.removeEventListener('gallery-session-expired', expired) }
   }, [])
+  useEffect(() => {
+    if (!session || session.configured) return
+    let active = true
+    const recheck = () => {
+      if (document.visibilityState !== 'visible') return
+      api<Session>('/auth/session').then(result => { if (active) setSession(result) }).catch(() => {})
+    }
+    window.addEventListener('focus', recheck)
+    document.addEventListener('visibilitychange', recheck)
+    const timer = window.setInterval(recheck, 15_000)
+    return () => {
+      active = false
+      window.removeEventListener('focus', recheck)
+      document.removeEventListener('visibilitychange', recheck)
+      window.clearInterval(timer)
+    }
+  }, [session?.configured])
 
   async function login(event: FormEvent) {
     event.preventDefault()
@@ -64,8 +83,12 @@ export function AuthGate({ children }: {
           {error && <p className="auth-error" role="alert">{error}</p>}
           <button className="button primary" type="submit" disabled={busy || !password}>{busy ? '正在登录…' : '进入应用空间'}</button>
         </form> : <>
+          <p role="status">{issue === 'too_short' ? 'Worker 已读取到密码，但去除首尾空白后不足 16 位。' :
+            issue === 'too_long' ? 'Worker 已读取到密码，但长度超过 256 位。' :
+              issue === 'missing' ? '当前运行的 Worker 未读取到 ADMIN_PASSWORD，并非密码输入错误。' :
+                '当前 API 未提供具体配置原因，请确认前端和 Worker 均已更新到最新版本。'}</p>
           <p>在 Cloudflare 的 Workers 与 Pages 中打开本站 Worker，进入设置中的变量和机密，添加类型为 Secret 的 <code>ADMIN_PASSWORD</code>。</p>
-          <p>使用 16 至 256 位的独立长密码，保存并部署后刷新。配置完成前，应用数据接口保持锁定。</p>
+          <p>确认是当前网址对应的 Worker 和生产环境，不是构建设置中的变量。使用 16 至 256 位的独立长密码，点击部署后重新检查。配置完成前，数据接口保持锁定。</p>
           <button className="button secondary" onClick={() => check().catch(error => setError(error.message))}>我已设置，重新检查</button>
           {error && <p className="auth-error" role="alert">{error}</p>}
         </>}

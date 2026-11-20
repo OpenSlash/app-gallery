@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse } from 'jsonc-parser'
@@ -12,6 +12,8 @@ let databases: { name: string; uuid: string }[]
 let calls: string[]
 let fail: string
 let staleBuild: boolean
+let secretsPath: string | undefined
+let uploadedSecrets: Record<string, string> | undefined
 const source = () => join(root, 'wrangler.jsonc')
 const built = () => join(root, 'dist/worker/wrangler.json')
 const read = (path: string) => parse(readFileSync(path, 'utf8'))
@@ -27,7 +29,7 @@ const run = (command: string, args: string[]) => {
   const step = command === 'pnpm' ? 'build' : args[0] === 'deploy' ? 'publish' :
     args[1] === 'migrations' ? 'migrate' : args[1]
   calls.push(step)
-  if (step === fail) throw new Error(`Simulated ${step} failure`)
+  if (step === fail && step !== 'publish') throw new Error(`Simulated ${step} failure`)
   if (step === 'list') return JSON.stringify(databases)
   if (step === 'create') databases.push({ name: args[2], uuid: id })
   if (step === 'migrate') {
@@ -39,12 +41,19 @@ const run = (command: string, args: string[]) => {
     writeFileSync(built(), JSON.stringify(read(source())))
   }
   if (step === 'publish') {
-    expect(args).toEqual(['deploy', '--config', built()])
+    expect(args.slice(0, 3)).toEqual(['deploy', '--config', built()])
     expect(read(built()).d1_databases[0].database_id).toBe(id)
+    if (args.length > 3) {
+      expect(args[3]).toBe('--secrets-file')
+      secretsPath = args[4]
+      uploadedSecrets = JSON.parse(readFileSync(secretsPath, 'utf8'))
+      expect(statSync(secretsPath).mode & 0o777).toBe(0o600)
+    }
+    if (step === fail) throw new Error(`Simulated ${step} failure`)
   }
   return ''
 }
-const execute = () => deploy({ root, run, log: () => {} })
+const execute = (adminPassword = '') => deploy({ root, run, log: () => {}, adminPassword })
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'app-gallery-deploy-'))
@@ -52,6 +61,8 @@ beforeEach(() => {
   calls = []
   fail = ''
   staleBuild = false
+  secretsPath = undefined
+  uploadedSecrets = undefined
   configure()
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -115,5 +126,31 @@ describe('D1 deployment orchestration', () => {
     expect(template.d1_databases[0].database_id).toBeUndefined()
     const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
     expect(pkg.scripts.deploy).toBe('node scripts/deploy.mjs')
+  })
+  it('uploads a build-time password as a runtime secret without adding it to config or command arguments', () => {
+    const password = 'test-only-deploy-password'
+    const logs: string[] = []
+    deploy({ root, run, adminPassword: password, log: message => logs.push(message) })
+    expect(uploadedSecrets).toEqual({ ADMIN_PASSWORD: password })
+    expect(secretsPath).toBeDefined()
+    expect(existsSync(secretsPath!)).toBe(false)
+    expect(readFileSync(source(), 'utf8')).not.toContain(password)
+    expect(readFileSync(built(), 'utf8')).not.toContain(password)
+    expect(logs.join('\n')).not.toContain(password)
+  })
+  it('removes the temporary secret file even when publishing fails', () => {
+    fail = 'publish'
+    expect(() => execute('test-only-deploy-password')).toThrow('Simulated publish failure')
+    expect(secretsPath).toBeDefined()
+    expect(existsSync(secretsPath!)).toBe(false)
+  })
+  it('preserves runtime-only secrets when no build-time password is supplied', () => {
+    execute()
+    expect(secretsPath).toBeUndefined()
+    expect(uploadedSecrets).toBeUndefined()
+  })
+  it.each(['short', ' '.repeat(16), 'x'.repeat(257)])('rejects invalid build passwords before changing cloud resources', password => {
+    expect(() => execute(password)).toThrow('Build-time ADMIN_PASSWORD must contain 16-256 characters')
+    expect(calls).toEqual([])
   })
 })

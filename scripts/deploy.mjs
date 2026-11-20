@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyEdits, modify, parse } from 'jsonc-parser'
@@ -36,7 +37,10 @@ function findDatabase(databases, name) {
   return matches[0]
 }
 
-export function deploy({ root = process.cwd(), run = runCommand, log = console.log } = {}) {
+export function deploy({ root = process.cwd(), run = runCommand, log = console.log, adminPassword = process.env.ADMIN_PASSWORD } = {}) {
+  if (adminPassword && (adminPassword.trim().length < 16 || adminPassword.length > 256)) {
+    throw new Error('Build-time ADMIN_PASSWORD must contain 16-256 characters (at least 16 after trimming whitespace).')
+  }
   const sourcePath = resolve(root, 'wrangler.jsonc')
   const builtPath = resolve(root, 'dist/worker/wrangler.json')
   let { text, config } = readConfig(sourcePath)
@@ -82,7 +86,21 @@ export function deploy({ root = process.cwd(), run = runCommand, log = console.l
   if (builtBindings.length !== 1 || builtBindings[0].database_id !== databaseId) {
     throw new Error('Built DB binding does not match the resolved database. Refusing to publish a stale build.')
   }
-  execute('wrangler', ['deploy', '--config', builtPath])
+  if (!adminPassword) {
+    log('No build-time ADMIN_PASSWORD supplied; preserving existing runtime secrets.')
+    execute('wrangler', ['deploy', '--config', builtPath])
+  } else {
+    // Upload only this explicit build secret, never local .dev.vars or unrelated environment values.
+    const directory = mkdtempSync(resolve(tmpdir(), 'app-gallery-secrets-'))
+    try {
+      const secretsPath = resolve(directory, 'secrets.json')
+      writeFileSync(secretsPath, JSON.stringify({ ADMIN_PASSWORD: adminPassword }), { mode: 0o600 })
+      log('Publishing ADMIN_PASSWORD as a runtime Worker secret (value hidden).')
+      execute('wrangler', ['deploy', '--config', builtPath, '--secrets-file', secretsPath])
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

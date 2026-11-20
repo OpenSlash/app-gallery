@@ -48,9 +48,28 @@ test('未配置密码时只展示配置指引，不提供公开设置入口', as
   }))
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '设置管理员密码' })).toBeVisible()
+  await expect(page.getByRole('status')).toContainText('当前 API 未提供具体配置原因')
   await expect(page.getByText('ADMIN_PASSWORD', { exact: true })).toBeVisible()
   await expect(page.locator('input[type="password"]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '添加应用', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '我已设置，重新检查' }).click()
   await expect(page.getByRole('heading', { name: '设置管理员密码' })).toBeVisible()
+})
+
+test('区分密码缺失和长度错误，回到页面时自动重新检测', async ({ page }) => {
+  let issue: 'missing' | 'too_short' | 'too_long' | null = 'missing'
+  await page.route('**/api/v1/auth/session', route => route.fulfill({
+    json: { configured: issue === null, authenticated: false, localDev: false, configurationIssue: issue },
+  }))
+  await page.goto('/')
+  await expect(page.getByRole('status')).toContainText('未读取到 ADMIN_PASSWORD')
+  issue = 'too_short'
+  await page.getByRole('button', { name: '我已设置，重新检查' }).click()
+  await expect(page.getByRole('status')).toContainText('不足 16 位')
+  issue = 'too_long'
+  await page.getByRole('button', { name: '我已设置，重新检查' }).click()
+  await expect(page.getByRole('status')).toContainText('超过 256 位')
+  issue = null
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.getByRole('heading', { name: '登录你的应用空间' })).toBeVisible()
 })

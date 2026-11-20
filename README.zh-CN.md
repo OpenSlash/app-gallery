@@ -101,6 +101,8 @@ Cloudflare 模板流程也可能提前创建数据库；已有真实 ID 时会�
 1. 在部署页面的 `ADMIN_PASSWORD` 中设置 16 至 256 位的独立长密码，
    建议使用密码管理器生成。该字段由 `.dev.vars.example` 声明，
    Cloudflare 将其作为 Worker Secret，而不是公开配置变量。
+   如果 Cloudflare 将其提供为构建 Secret，`pnpm deploy` 会在发布时显式上传为
+   运行时 Worker Secret，不写入源码配置或前端产物。
 2. 完成部署，打开 Worker 地址，用该密码登录。
 3. 确认未登录请求 `/api/v1/applications` 返回 401，再录入真实资料。
 
@@ -108,6 +110,8 @@ Cloudflare 模板流程也可能提前创建数据库；已有真实 ID 时会�
 可在 Worker 的设置 > 变量和机密中，添加类型为 **Secret** 的
 `ADMIN_PASSWORD`，保存并部署。不要将真实密码放入 `wrangler.jsonc`、
 源代码或 `VITE_*` 变量。
+如果直接在 Worker 设置中管理密码，请留空构建环境的 `ADMIN_PASSWORD`。
+两处都配置时，每次部署都会上传构建环境中的值，覆盖运行时的旧值。
 
 会话有效期 12 小时，HTTPS 下使用仅限当前主机的 HttpOnly、Secure、
 SameSite=Strict Cookie。D1 只存令牌哈希和绑定当前密码的校验值；
@@ -148,6 +152,19 @@ pnpm exec wrangler secret put ADMIN_PASSWORD
 后者会应用新增的会话表迁移，再设置 `ADMIN_PASSWORD` Secret。
 确认密码登录正常后，可移除旧 Access 应用或 Worker 保护，避免额外登录。
 `ACCESS_TEAM_DOMAIN` 和 `ACCESS_AUD` 不再使用，已有应用及历史数据保留。
+
+### 已设置密码仍显示设置页面
+
+打开同一生产域名下的 `/api/v1/auth/session`，查看 `configurationIssue`：
+`missing` 表示当前运行的 Worker 没有收到变量，`too_short` 表示过短，
+`too_long` 表示过长。合法密码（包括恰好 16 位）会返回
+`configured: true` 和 `configurationIssue: null`，不会返回密码或具体长度。
+
+若为 `missing`，检查变量是否配置在当前网址对应的 Worker 和生产环境，
+而不是只配置在构建设置中；添加运行时 Secret 后需点击部署。
+也可以更新部署脚本，设置构建 Secret，然后以 `pnpm deploy` 重新构建部署。
+构建变量不会天然成为运行时绑定，新脚本会显式上传。
+设置页面会在切回标签页时和可见状态下每 15 秒重新检测，也可手动点击检查。
 
 ## API 与语言
 

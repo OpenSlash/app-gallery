@@ -48,19 +48,30 @@ async function login() {
 
 describe('管理员密码和会话', () => {
   it('未设置或密码过短时锁定 API，并提供公开设置状态', async () => {
-    for (const ADMIN_PASSWORD of [undefined, '', 'short', ' '.repeat(20), 'x'.repeat(257)]) {
+    for (const [ADMIN_PASSWORD, configurationIssue] of [
+      [undefined, 'missing'], ['', 'missing'], ['short', 'too_short'], [' '.repeat(20), 'too_short'], ['x'.repeat(257), 'too_long'],
+    ] as const) {
       const bindings = { ...env, ADMIN_PASSWORD }
       const response = await request('/applications', {}, bindings)
       expect(response.status).toBe(503)
       expect(response.headers.get('Cache-Control')).toBe('no-store')
       const status = await request('/auth/session', {}, bindings)
-      expect(await status.json()).toEqual({ configured: false, authenticated: false, localDev: false })
+      expect(await status.json()).toEqual({ configured: false, authenticated: false, localDev: false, configurationIssue })
     }
   })
   it('未登录或伪造旧 Access 头无法读取 API', async () => {
     const response = await request('/applications', { headers: { 'Cf-Access-Jwt-Assertion': 'fake' } })
     expect(response.status).toBe(401)
-    expect(await (await request('/auth/session')).json()).toEqual({ configured: true, authenticated: false, localDev: false })
+    expect(await (await request('/auth/session')).json()).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null })
+  })
+  it('恰好 16 位的密码能配置并登录，诊断不暴露密码或具体长度', async () => {
+    env.ADMIN_PASSWORD = 'exactly16letters'
+    expect(env.ADMIN_PASSWORD).toHaveLength(16)
+    const response = await request('/auth/session')
+    const status = await response.json() as Record<string, unknown>
+    expect(status).toEqual({ configured: true, authenticated: false, localDev: false, configurationIssue: null })
+    expect(JSON.stringify(status)).not.toContain(env.ADMIN_PASSWORD)
+    expect((await post('/auth/login', { password: env.ADMIN_PASSWORD })).status).toBe(200)
   })
   it('正确密码创建安全 Cookie，数据库不存原始令牌或密码', async () => {
     const response = await post('/auth/login', { password })
@@ -137,7 +148,7 @@ describe('管理员密码和会话', () => {
   })
   it('本地开发可绕过认证，但仍拒绝跨域写入', async () => {
     const status = await worker.request('http://localhost/api/v1/auth/session', {}, { LOCAL_DEV: 'true' })
-    expect(await status.json()).toEqual({ configured: true, authenticated: true, localDev: true })
+    expect(await status.json()).toEqual({ configured: true, authenticated: true, localDev: true, configurationIssue: null })
     expect((await worker.request('http://localhost/api/v1/missing', {}, { LOCAL_DEV: 'true' })).status).toBe(404)
     const cross = await worker.request('http://127.0.0.1/api/v1/applications', {
       method: 'POST', headers: { Origin: 'https://evil.example.com', 'Content-Type': 'application/json' }, body: '{}',

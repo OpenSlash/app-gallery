@@ -1,5 +1,6 @@
 export async function api<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
+    cache: 'no-store',
     method: body === undefined ? 'GET' : method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { passwordConfigurationIssue } from '../shared/auth'
 
 export interface Env {
   DB: D1Database
@@ -17,8 +18,14 @@ const bytes = (value: string) => new Uint8Array(value.match(/../g)!.map(byte => 
 const digest = async (value: string) => hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
 const localHost = (url: URL) => ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
 const localDev = (c: Context<AuthEnv>) => c.env.LOCAL_DEV === 'true' && localHost(new URL(c.req.url))
-const configured = (env: Env) => typeof env.ADMIN_PASSWORD === 'string' &&
-  env.ADMIN_PASSWORD.trim().length >= 16 && env.ADMIN_PASSWORD.length <= 256
+const configured = (env: Env) => passwordConfigurationIssue(env.ADMIN_PASSWORD) === null
+const configurationError = (env: Env) => {
+  switch (passwordConfigurationIssue(env.ADMIN_PASSWORD)) {
+    case 'too_short': return 'Worker 已读取到 ADMIN_PASSWORD，但去除首尾空白后不足 16 位。'
+    case 'too_long': return 'Worker 已读取到 ADMIN_PASSWORD，但长度超过 256 位。'
+    default: return '当前运行的 Worker 未读取到 ADMIN_PASSWORD。请设置运行时 Secret 并部署，而不是仅设置构建变量。'
+  }
+}
 const cookieName = (c: Context<AuthEnv>) => new URL(c.req.url).protocol === 'https:' ? '__Host-gallery-session' : 'gallery-session'
 const cookieOptions = (c: Context<AuthEnv>) => ({
   path: '/', secure: new URL(c.req.url).protocol === 'https:', httpOnly: true, sameSite: 'Strict' as const,
@@ -59,7 +66,7 @@ export const authentication = createMiddleware<AuthEnv>(async (c, next) => {
   }
   if (localDev(c)) c.set('actor', 'local-developer')
   else {
-    if (!configured(c.env)) return c.json({ error: '请先在 Worker Secrets 中设置至少 16 位的 ADMIN_PASSWORD。' }, 503)
+    if (!configured(c.env)) return c.json({ error: configurationError(c.env) }, 503)
     if (!await authenticated(c)) return c.json({ error: '请先登录，或重新登录已过期的会话。' }, 401)
     c.set('actor', 'administrator')
   }
@@ -71,10 +78,11 @@ authRoutes.get('/session', async c => c.json({
   configured: configured(c.env) || localDev(c),
   authenticated: localDev(c) || await authenticated(c),
   localDev: localDev(c),
+  configurationIssue: localDev(c) ? null : passwordConfigurationIssue(c.env.ADMIN_PASSWORD),
 }))
 
 authRoutes.post('/login', async c => {
-  if (!configured(c.env)) return c.json({ error: '请先在 Worker Secrets 中设置至少 16 位的 ADMIN_PASSWORD。' }, 503)
+  if (!configured(c.env)) return c.json({ error: configurationError(c.env) }, 503)
   const url = new URL(c.req.url)
   if (url.protocol !== 'https:' && !localHost(url)) return c.json({ error: '登录必须使用 HTTPS。' }, 400)
   if (!c.env.LOGIN_RATE_LIMITER) return c.json({ error: '登录限流尚未配置，请检查 Worker 绑定。' }, 503)
