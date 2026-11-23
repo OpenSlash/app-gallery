@@ -174,3 +174,82 @@ test('上传图标到 D1、加载失败回退和持久化', async ({ page }) => 
   await page.getByRole('textbox', { name: '搜索应用' }).fill(name)
   await expect(tileImage).toHaveAttribute('src', iconUrl)
 })
+
+test('从网址获取信息、预览图标、修改并保存', async ({ page, request }) => {
+  const name = `Extracted Product ${Date.now()}`
+  const uploaded = await request.post('/api/v1/icons', {
+    headers: { Origin: 'http://127.0.0.1:4178', 'Content-Type': 'image/svg+xml' },
+    data: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#25634a"/></svg>',
+  })
+  expect(uploaded.status()).toBe(201)
+  const { iconUrl } = await uploaded.json()
+  let release!: () => void
+  const ready = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/v1/website-metadata', async route => {
+    expect(route.request().postDataJSON()).toEqual({ url: 'https://product.example.com/console' })
+    await ready
+    await route.fulfill({ json: { name, description: 'Team product', iconUrl, warnings: [] } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '添加应用', exact: true }).first().click()
+  const fetchInfo = page.getByRole('button', { name: '获取网站信息', exact: true })
+  await expect(fetchInfo).toBeDisabled()
+  await page.getByLabel('访问地址', { exact: true }).fill('https://product.example.com/console')
+  await fetchInfo.click()
+  await expect(page.getByRole('button', { name: '正在获取…', exact: true })).toBeDisabled()
+  await expect(page.getByLabel('访问地址', { exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '添加应用', exact: true }).last()).toBeDisabled()
+  release()
+  await expect(page.getByLabel('应用名称')).toHaveValue(name)
+  await expect(page.getByLabel('一句话介绍')).toHaveValue('Team product')
+  await expect(page.getByLabel('网站图标地址')).toHaveValue(iconUrl)
+  const preview = page.locator('.icon-picker > .app-icon > img')
+  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth > 0)).toBe(true)
+  await expect(page.getByRole('status')).toContainText('识别完成')
+  await page.getByLabel('一句话介绍').fill('Manually corrected description')
+  await page.getByRole('button', { name: '添加应用', exact: true }).last().click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.reload()
+  await page.getByRole('textbox', { name: '搜索应用' }).fill(name)
+  await expect(page.locator('.app-tile')).toHaveCount(1)
+  await expect(page.locator('.app-tile img')).toHaveAttribute('src', iconUrl)
+  await expect(page.getByRole('link', { name: `访问 ${name}` })).toHaveAttribute('href', 'https://product.example.com/console')
+})
+
+test('信息提取失败可重试、保留手填字段和原有图标、移动端无溢出', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  let attempts = 0
+  await page.route('**/api/v1/website-metadata', route => {
+    attempts++
+    return attempts === 1
+      ? route.fulfill({ status: 422, json: { error: '网站需要登录，无法读取信息，请手动填写。' } })
+      : route.fulfill({ json: {
+        name: 'Login page name', description: 'Remote description', iconUrl: '',
+        warnings: ['未找到可用图标，已保留原图标，可手动上传。'],
+      } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '添加应用', exact: true }).first().click()
+  await page.getByLabel('应用名称').fill('My internal product')
+  await page.getByLabel('一句话介绍').fill('My description')
+  await page.getByLabel('访问地址', { exact: true }).fill('https://product.example.com')
+  const file = { name: 'custom.svg', mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle r="12" cx="16" cy="16"/></svg>') }
+  await page.getByLabel('上传应用图标').setInputFiles(file)
+  await expect(page.getByLabel('网站图标地址')).toHaveValue(/^\/api\/v1\/icons\//)
+  const originalIcon = await page.getByLabel('网站图标地址').inputValue()
+  const fetchInfo = page.getByRole('button', { name: '获取网站信息', exact: true })
+  await fetchInfo.click()
+  await expect(page.getByRole('alert')).toContainText('网站需要登录')
+  await expect(fetchInfo).toBeEnabled()
+  await expect(page.getByLabel('应用名称')).toHaveValue('My internal product')
+  await fetchInfo.click()
+  await expect(page.getByRole('status')).toContainText('已有内容未覆盖')
+  await expect(page.getByRole('status')).toContainText('未找到可用图标')
+  await expect(page.getByLabel('应用名称')).toHaveValue('My internal product')
+  await expect(page.getByLabel('一句话介绍')).toHaveValue('My description')
+  await expect(page.getByLabel('网站图标地址')).toHaveValue(originalIcon)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
+  await page.screenshot({ path: 'test-results/website-metadata-mobile.png', fullPage: true, animations: 'disabled' })
+})

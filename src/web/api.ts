@@ -1,3 +1,7 @@
+import type { WebsiteMetadata } from '../shared/website-metadata'
+
+export const fetchWebsiteMetadata = (url: string) => api<WebsiteMetadata>('/website-metadata', { url })
+
 export async function api<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     cache: 'no-store',

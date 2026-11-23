@@ -4,21 +4,27 @@ import { validIconContent } from '../shared/icons'
 
 export const iconRoutes = new Hono<{ Bindings: Env }>()
 
+export async function storeIcon(db: D1Database, data: Uint8Array, contentType: string) {
+  if (!validIconContent(data, contentType)) throw new Error('Invalid icon content')
+  const bytes = new Uint8Array(data)
+  const hashBytes = await crypto.subtle.digest('SHA-256', bytes)
+  const hash = [...new Uint8Array(hashBytes)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+  const id = crypto.randomUUID()
+  await db.prepare(`
+    INSERT INTO uploaded_icons (id, content_hash, content_type, data, byte_length, created_at)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING
+  `).bind(id, hash, contentType, bytes.buffer, bytes.length, Date.now()).run()
+  const stored = await db.prepare('SELECT id FROM uploaded_icons WHERE content_hash=?')
+    .bind(hash).first<{ id: string }>()
+  if (!stored) throw new Error('Uploaded icon was not persisted')
+  return { id: stored.id, iconUrl: `/api/v1/icons/${stored.id}` }
+}
+
 iconRoutes.post('/', async c => {
   const data = new Uint8Array(await c.req.arrayBuffer())
   const contentType = c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() ?? ''
   if (!validIconContent(data, contentType)) return c.json({ error: '图标内容或格式无效，请使用 PNG、JPEG、WebP、ICO 或不含脚本及外部资源的 SVG。' }, 400)
-  const hashBytes = await crypto.subtle.digest('SHA-256', data)
-  const hash = [...new Uint8Array(hashBytes)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-  const id = crypto.randomUUID()
-  await c.env.DB.prepare(`
-    INSERT INTO uploaded_icons (id, content_hash, content_type, data, byte_length, created_at)
-    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING
-  `).bind(id, hash, contentType, data.buffer, data.length, Date.now()).run()
-  const stored = await c.env.DB.prepare('SELECT id FROM uploaded_icons WHERE content_hash=?')
-    .bind(hash).first<{ id: string }>()
-  if (!stored) throw new Error('Uploaded icon was not persisted')
-  return c.json({ id: stored.id, iconUrl: `/api/v1/icons/${stored.id}` }, 201)
+  return c.json(await storeIcon(c.env.DB, data, contentType), 201)
 })
 
 iconRoutes.get('/:id', async c => {

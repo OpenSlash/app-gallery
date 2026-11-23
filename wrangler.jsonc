@@ -26,6 +26,11 @@
       "name": "LOGIN_RATE_LIMITER",
       "namespace_id": "48127",
       "simple": { "limit": 5, "period": 60 }
+    },
+    {
+      "name": "METADATA_RATE_LIMITER",
+      "namespace_id": "48129",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
   "observability": { "enabled": true }

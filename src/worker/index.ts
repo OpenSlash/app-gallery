@@ -2,10 +2,11 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { drizzle } from 'drizzle-orm/d1'
 import { applications } from './db/schema'
-import { appInput, nextStatus, patchInput, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
+import { appInput, httpUrl, nextStatus, patchInput, transitionInput, updateInput, utcDateStart, type AppRecord, type HistoryEvent, type Status } from '../shared/model'
 import { authentication, authRoutes, isTokenRequest, type Env } from './auth'
 import { iconContentTypes, maxIconBytes } from '../shared/icons'
 import { iconRoutes } from './icons'
+import { extractWebsiteMetadata, MetadataError } from './website-metadata'
 
 const app = new Hono<{ Bindings: Env; Variables: { actor: string } }>()
 
@@ -46,6 +47,25 @@ app.use('/api/*', async (c, next) => {
 app.use('/api/*', authentication)
 app.route('/api/v1/auth', authRoutes)
 app.route('/api/v1/icons', iconRoutes)
+
+app.post('/api/v1/website-metadata', async c => {
+  if (!c.env.METADATA_RATE_LIMITER) return c.json({ error: '网站信息获取限流尚未配置，请使用 pnpm run deploy 重新部署。' }, 503)
+  const limited = await c.env.METADATA_RATE_LIMITER.limit({
+    key: `${new URL(c.req.url).host}:metadata:${c.req.header('CF-Connecting-IP') || 'unknown'}`,
+  })
+  if (!limited.success) {
+    c.header('Retry-After', '60')
+    return c.json({ error: '获取过于频繁，请稍后重试。' }, 429)
+  }
+  const body = await c.req.json()
+  const input = httpUrl.parse(body?.url)
+  try {
+    return c.json(await extractWebsiteMetadata(input, c.env.DB, new URL(c.req.url).origin))
+  } catch (error) {
+    if (error instanceof MetadataError) return c.json({ error: error.message }, error.status)
+    throw error
+  }
+})
 
 async function uploadedIconExists(db: D1Database, url: string) {
   return !url.startsWith('/api/v1/icons/') || Boolean(await db.prepare('SELECT id FROM uploaded_icons WHERE id=?')

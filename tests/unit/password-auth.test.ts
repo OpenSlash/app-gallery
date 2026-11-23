@@ -30,7 +30,8 @@ beforeEach(() => {
     },
   } as unknown as D1Database
   limit = vi.fn(async () => ({ success: true }))
-  env = { DB, ADMIN_PASSWORD: password, LOGIN_RATE_LIMITER: { limit } }
+  env = { DB, ADMIN_PASSWORD: password, LOGIN_RATE_LIMITER: { limit },
+    METADATA_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } }
 })
 afterEach(() => sqlite.close())
 
@@ -301,6 +302,47 @@ describe('部署故障诊断', () => {
   })
 })
 
+describe('网站信息获取权限', () => {
+  it('仅允许同源管理员会话，不向远端转发管理员 Cookie', async () => {
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      '<title>Internal Product</title>', { headers: { 'Content-Type': 'text/html' } },
+    ))
+    try {
+      expect((await post('/website-metadata', { url: 'https://example.com' })).status).toBe(401)
+      expect(network).not.toHaveBeenCalled()
+      const cookie = await login()
+      const response = await post('/website-metadata', { url: 'http://20.118.174.65:8787/console' }, cookie)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('Cache-Control')).toBe('no-store')
+      expect(await response.json()).toMatchObject({ name: 'Internal Product', iconUrl: '' })
+      for (const [, init] of network.mock.calls) expect(new Headers(init?.headers).has('Cookie')).toBe(false)
+      network.mockClear()
+      for (const url of ['http://localhost/', 'http://10.0.0.1/', 'javascript:alert(1)']) {
+        expect((await post('/website-metadata', { url }, cookie)).status).toBe(400)
+      }
+      expect((await post('/website-metadata', null, cookie)).status).toBe(400)
+      expect((await request('/website-metadata', { method: 'POST',
+        headers: { Cookie: cookie, Origin: 'https://evil.example.com', 'Content-Type': 'application/json' },
+        body: '{"url":"https://example.com"}',
+      })).status).toBe(403)
+      expect(network).not.toHaveBeenCalled()
+    } finally { network.mockRestore() }
+  })
+  it('限流或缺失限流绑定时不执行抓取', async () => {
+    const network = vi.spyOn(globalThis, 'fetch')
+    try {
+      const cookie = await login()
+      env.METADATA_RATE_LIMITER = { limit: vi.fn(async () => ({ success: false })) }
+      const response = await post('/website-metadata', { url: 'https://example.com' }, cookie)
+      expect(response.status).toBe(429)
+      expect(response.headers.get('Retry-After')).toBe('60')
+      env.METADATA_RATE_LIMITER = undefined
+      expect((await post('/website-metadata', { url: 'https://example.com' }, cookie)).status).toBe(503)
+      expect(network).not.toHaveBeenCalled()
+    } finally { network.mockRestore() }
+  })
+})
+
 describe('应用读写 API Token', () => {
   async function issue(cookie?: string, input: unknown = { name: 'test integration', expiresInDays: 30 }) {
     const session = cookie ?? await login()
@@ -357,6 +399,7 @@ describe('应用读写 API Token', () => {
       ['POST', '/auth/tokens'], ['POST', '/auth/tokens/fake/revoke'], ['POST', '/auth/logout'],
       ['PUT', '/applications/fake'], ['POST', '/applications/fake/archive'],
       ['POST', '/deployments/fake/transitions'],
+      ['POST', '/website-metadata'],
     ]) {
       const response = await request(path, { method, headers: {
         Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json',

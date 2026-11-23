@@ -11,16 +11,18 @@ A private launchpad and lifecycle log for your websites, infrastructure services
 - Launchpad-inspired interface with a white background and a favorites Dock.
 - Launchpad and card views, global zoom, and small / medium / large app cards.
 - Add, edit, search, categorize, tag, filter, sort, and favorite applications.
+- Retrieve public website names, descriptions, and icons from the app editor.
+- Upload application icons to D1 without bundling private service logos in source.
 - Record first launch dates, releases, notes, pauses, resumptions, and retirement.
 - View elapsed days and cumulative active periods from lifecycle records.
 - Archive retired or not-yet-launched apps without deleting their history.
 - Accessible Radix UI primitives and 16 application icons from Radix Icons.
 - D1 persistence, validated APIs, and built-in administrator password login.
-- Revocable, expiring API tokens limited to adding applications.
+- Revocable, expiring API tokens scoped to application metadata and icon uploads.
 
 Each application currently has one production deployment and one URL. Dates use
 UTC. Durations describe recorded lifecycle periods, **not monitored uptime**.
-Multiple environments, migration, import/export, monitoring, and file uploads
+Multiple environments, migration, import/export, monitoring, and general file uploads
 are not implemented.
 
 The application interface is currently **Simplified Chinese**. The README is
@@ -253,12 +255,44 @@ Icons appear in the launchpad, cards, details, editor preview, and Dock. Failed
 images fall back to the chosen Radix icon. Choosing a Radix icon clears `iconUrl`.
 External HTTPS image URLs without embedded credentials remain optional; their
 requests omit the referrer, but remote hosts still receive the visitor's IP.
-Download icons from HTTP services and upload them instead of embedding mixed
-content. The server does not fetch arbitrary URLs. SVG responses are sandboxed
+Download icons from HTTP services and upload them, or use website information
+retrieval, instead of embedding mixed content. SVG responses are sandboxed
 with a restrictive CSP; scripted SVG and external references are rejected.
 
 Use `pnpm run deploy` to migrate icon metadata and uploaded image storage before
 publishing. Existing applications are not automatically changed.
+
+### Retrieve Website Information
+
+In the app editor, enter the full HTTP(S) address and click **获取网站信息**
+("Get website information"). The server reads public HTML metadata and icon
+links, then tries conventional favicon paths. Valid icons are copied into D1
+using the same 256 KiB limit and validation as manual uploads. Results fill
+only empty name, description, and icon fields; existing edits are never
+overwritten. Review or change the result, then save the application.
+Fetched icons are independent assets, just like manual uploads.
+
+Login-page metadata can be read if publicly available, including HTML returned
+with 401/403. Product credentials, browser cookies, API tokens, and upstream
+Set-Cookie headers are never forwarded or reused. Pages requiring JavaScript,
+a logged-in session, bot-challenge completion, or private-network access may
+require manual entry. Cross-host page redirects, such as separate SSO sites,
+are not adopted as product identity. The entered application URL is preserved.
+Remote sites and DNS providers see the Worker requests, not the browser session.
+
+`POST /api/v1/website-metadata` accepts `{ "url": "https://example.com/console" }`
+and returns `{ name, description, iconUrl, warnings }`. It requires the
+administrator's same-origin browser session; API tokens cannot call it.
+Partial results include warnings; failures leave the form editable.
+The included `METADATA_RATE_LIMITER` allows 10 attempts per minute per IP and
+Cloudflare location. Use `pnpm run deploy` to publish the new binding.
+
+Retrieval accepts only public HTTP(S) destinations, checks literal and DNS IP
+addresses, validates every redirect and icon destination, rejects HTTPS
+downgrades, and never executes remote scripts or follows meta refresh.
+HTML is limited to 512 KiB, icons to 256 KiB, each fetch chain to 4.5 seconds,
+the overall remote operation to 15 seconds, and outbound fetches to 32.
+The app is not a private-network connector or authenticated browser.
 
 ### API Token Permissions
 
@@ -274,7 +308,7 @@ deploying. Supported endpoints:
 - `GET /api/v1/icons/:id`: read an uploaded image.
 
 Tokens cannot list the application directory, archive applications, change
-lifecycle records, or access authentication/token management.
+lifecycle records, retrieve website metadata, or access authentication/token management.
 HTTPS is required except on loopback for development. Script requests
 do not need a Cookie or Origin header. Cross-origin browser calls remain blocked;
 there is no permissive CORS. A supplied invalid Authorization header never falls

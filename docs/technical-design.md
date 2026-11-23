@@ -239,7 +239,13 @@ wrangler.jsonc
   无效 Authorization 不回退到 Cookie 或本地开发身份。
 - 私有 API 使用 `Cache-Control: no-store`，不写入公共 CDN 缓存。
 - React 文本转义输出，不渲染任意 HTML；外链新窗口使用安全 rel 属性。
-- 第一版不服务端抓取用户输入 URL，不自动下载远程图标，避免 SSRF。
+- 管理员可在编辑器通过 `POST /api/v1/website-metadata` 按需提取公开网页名称、介绍和图标，
+  只补全空白字段，确认保存前不修改应用。图标复用上传校验、哈希去重和 D1 存储。
+  此接口仅允许同源管理员会话，不扩展 Bearer Token 权限；独立限流绑定每 IP、每节点每分钟 10 次。
+  只允许公网 HTTP(S)，验证字面 IP、A/AAAA DNS 结果及每个跳转/图标目标，拒绝私有、保留地址和本站自身。
+  不发送 Cookie、Token 或目标站凭据，不执行 JavaScript、meta refresh，也不采用异域 SSO 的产品身份。
+  每条请求链 4.5 秒、远程操作总计 15 秒、32 次出站请求预算；HTML 512 KiB、图片 256 KiB。
+  失败保留手动输入；可提取公开登录页，但不保证需要登录态、JS 或人机验证的站点可识别。
 - 上传图标限制 256 KiB，按内容哈希去重，以 BLOB 保存到 D1，不捆绑个人服务图标或要求 R2。
   图片需认证读取，设置 nosniff、同源资源策略及 sandbox CSP，拒绝 SVG 中的脚本和外部引用。
 - 日志记录请求 ID、耗时、结果，不记录身份令牌、完整导出内容或敏感查询参数。

@@ -82,3 +82,18 @@ test('图标地址持久化、兼容旧客户端和拒绝危险图标', async ({
   })
   expect(withRemoteIcon.status()).toBe(201)
 })
+
+test('网站信息接口校验输入、拒绝内网地址和跨域请求', async ({ request }) => {
+  const headers = { Origin: 'http://127.0.0.1:4178' }
+  for (const data of [null, {}, { url: 'javascript:alert(1)' }, { url: 'http://127.0.0.1/' }, { url: 'http://169.254.169.254/' }]) {
+    const response = await request.post('/api/v1/website-metadata', {
+      headers: { ...headers, 'Content-Type': 'application/json' }, data: JSON.stringify(data),
+    })
+    expect(response.status()).toBe(400)
+    expect(response.headers()['cache-control']).toBe('no-store')
+  }
+  const cross = await request.post('/api/v1/website-metadata', {
+    headers: { Origin: 'https://evil.example.com' }, data: { url: 'https://example.com' },
+  })
+  expect(cross.status()).toBe(403)
+})

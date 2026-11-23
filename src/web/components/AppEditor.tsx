@@ -1,13 +1,13 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { CheckIcon } from '../icons'
-import { colors, icons, sizes, types, typeLabels, appInput, type AppInput, type AppRecord } from '../../shared/model'
+import { colors, icons, sizes, types, typeLabels, appInput, httpUrl, type AppInput, type AppRecord } from '../../shared/model'
 import { AppIcon, iconLabels } from '../icons'
 import { Dialog } from './Dialog'
 import { Select } from './ui/Select'
 import { Checkbox } from './ui/Checkbox'
 import { Tooltip } from './ui/Tooltip'
 import { maxIconBytes } from '../../shared/icons'
-import { uploadIcon } from '../api'
+import { fetchWebsiteMetadata, uploadIcon } from '../api'
 
 const empty: AppInput = {
   name: '', description: '', url: '', type: 'website', category: '', tags: [],
@@ -21,12 +21,15 @@ export function AppEditor({ value, onClose, onSave }: {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [metadataNotice, setMetadataNotice] = useState('')
+  const busy = saving || uploading || extracting
   function field<K extends keyof AppInput>(key: K, value: AppInput[K]) {
     setData(previous => ({ ...previous, [key]: value }))
   }
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (uploading) return
+    if (busy) return
     const input = { ...data, tags: [...new Set(tagText.split(/[,，]/).map(tag => tag.trim()).filter(Boolean))] }
     const parsed = appInput.safeParse(input)
     if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? '请检查输入'); return }
@@ -47,8 +50,31 @@ export function AppEditor({ value, onClose, onSave }: {
     } catch (error) { setError((error as Error).message) }
     finally { setUploading(false) }
   }
-  return <Dialog title={value ? '编辑应用' : '添加到我的空间'} onClose={onClose} dismissible={!saving && !uploading}>
+  async function extract() {
+    if (busy) return
+    const parsed = httpUrl.safeParse(data.url)
+    if (!parsed.success) { setError('请先填写完整的 HTTP 或 HTTPS 访问地址。'); return }
+    setExtracting(true); setError(''); setMetadataNotice('')
+    try {
+      const result = await fetchWebsiteMetadata(parsed.data)
+      const preserved = (result.name && data.name.trim()) || (result.description && data.description.trim()) || (result.iconUrl && data.iconUrl.trim())
+      setData(previous => ({
+        ...previous,
+        name: previous.name.trim() ? previous.name : result.name,
+        description: previous.description.trim() ? previous.description : result.description,
+        iconUrl: previous.iconUrl.trim() ? previous.iconUrl : result.iconUrl,
+      }))
+      setMetadataNotice([
+        '识别完成，已补全空白字段，请确认后保存。',
+        preserved ? '已有内容未覆盖；如需替换，请清空对应字段后重新获取。' : '',
+        ...result.warnings,
+      ].filter(Boolean).join(' '))
+    } catch (error) { setError((error as Error).message) }
+    finally { setExtracting(false) }
+  }
+  return <Dialog title={value ? '编辑应用' : '添加到我的空间'} onClose={onClose} dismissible={!busy}>
     <form onSubmit={submit} className="editor">
+      <fieldset className="editor-fields" disabled={busy}>
       <div className="icon-picker"><AppIcon icon={data.icon} color={data.color} iconUrl={data.iconUrl} />
         <div><span className="field-caption">给应用一个熟悉的样子</span>
           <div className="icon-options">{icons.map(icon => <Tooltip label={iconLabels[icon]} key={icon}><button type="button" aria-label={`图标：${iconLabels[icon]}`}
@@ -58,9 +84,19 @@ export function AppEditor({ value, onClose, onSave }: {
         </div>
       </div>
       <div className="form-grid">
-        <label>应用名称<input autoFocus required maxLength={80} placeholder="例如：我的博客" value={data.name} onChange={e => field('name', e.target.value)} /></label>
+        <div className="form-field full">
+          <label htmlFor="application-url">访问地址</label>
+          <div className="metadata-address">
+            <input id="application-url" autoFocus={!value} type="url" required maxLength={2048} placeholder="https://example.com" value={data.url} onChange={e => { field('url', e.target.value); setMetadataNotice('') }} />
+            <button type="button" className="button secondary" disabled={busy || !data.url.trim()} onClick={extract}>
+              {extracting ? '正在获取…' : '获取网站信息'}
+            </button>
+          </div>
+          <small>读取登录前可见的名称和图标，仅补全空白字段，结果可修改。</small>
+          {(extracting || metadataNotice) && <p className="metadata-notice" role="status">{extracting ? '正在读取网页并保存图标，请稍候…' : metadataNotice}</p>}
+        </div>
+        <label>应用名称<input autoFocus={Boolean(value)} required maxLength={80} placeholder="例如：我的博客" value={data.name} onChange={e => field('name', e.target.value)} /></label>
         <div className="form-field"><span>应用类型</span><Select label="应用类型" value={data.type} onValueChange={value => field('type', value)} options={types.map(type => ({ value: type, label: typeLabels[type] }))} /></div>
-        <label className="full">访问地址<input type="url" required maxLength={2048} placeholder="https://example.com" value={data.url} onChange={e => field('url', e.target.value)} /></label>
         <div className="form-field full website-icon-field">
           <label>上传应用图标<input type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.svg" disabled={saving || uploading} onChange={upload} /></label>
           {uploading && <span role="status">正在上传图标…</span>}
@@ -79,9 +115,10 @@ export function AppEditor({ value, onClose, onSave }: {
         <div className="form-field"><span>卡片尺寸</span><Select label="卡片尺寸" value={data.size} onValueChange={value => field('size', value)} options={sizes.map((size, i) => ({ value: size, label: ['小 · 1 × 1', '中 · 2 × 1', '大 · 2 × 2'][i] }))} /></div>
       </div>
       <Checkbox label="收藏到 Dock" checked={data.favorite} onCheckedChange={value => field('favorite', value)} />
+      </fieldset>
       {error && <p role="alert" className="form-error">{error}</p>}
-      <div className="dialog-footer"><button type="button" className="button secondary" onClick={onClose} disabled={saving || uploading}>取消</button>
-        <button className="button primary" disabled={saving || uploading}>{saving ? '正在保存…' : value ? '保存更改' : '添加应用'}</button></div>
+      <div className="dialog-footer"><button type="button" className="button secondary" onClick={onClose} disabled={busy}>取消</button>
+        <button className="button primary" disabled={busy}>{saving ? '正在保存…' : value ? '保存更改' : '添加应用'}</button></div>
     </form>
   </Dialog>
 }
